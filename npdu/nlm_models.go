@@ -141,7 +141,7 @@ func NewWhoIsRouterToNetworkMessage(dnet *netprim.NetworkNumber) (WhoIsRouterToN
 		return WhoIsRouterToNetworkMessage{}, errors.NewValidationError("dnet", *dnet, ErrInvalidNetworkNumber)
 	}
 
-	return WhoIsRouterToNetworkMessage{DNET: new(*dnet)}, nil
+	return WhoIsRouterToNetworkMessage{DNET: ptr(*dnet)}, nil
 }
 
 func (m WhoIsRouterToNetworkMessage) Header() NetworkLayerMessageHeader {
@@ -524,7 +524,7 @@ func NewProprietaryNetworkLayerMessageModel(messageType NetworkLayerMessageType,
 }
 
 func (m ProprietaryNetworkLayerMessageModel) Header() NetworkLayerMessageHeader {
-	return NetworkLayerMessageHeader{MessageType: m.MessageType, VendorID: new(m.VendorID)}
+	return NetworkLayerMessageHeader{MessageType: m.MessageType, VendorID: ptr(m.VendorID)}
 }
 
 func (m ProprietaryNetworkLayerMessageModel) PayloadBytes() []byte {
@@ -603,7 +603,7 @@ func DecodeNetworkLayerMessageModel(header NetworkLayerMessageHeader, payload []
 		case 0:
 			return NewWhoIsRouterToNetworkMessage(nil)
 		case 2:
-			return NewWhoIsRouterToNetworkMessage(new(netprim.NetworkNumber(binary.BigEndian.Uint16(payload))))
+			return NewWhoIsRouterToNetworkMessage(ptr(netprim.NetworkNumber(binary.BigEndian.Uint16(payload))))
 		default:
 			return nil, errors.NewValidationError("payload", len(payload), ErrInvalidLength)
 		}

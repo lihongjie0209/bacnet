@@ -122,7 +122,7 @@ func classifyRemoteAPDUError(serviceChoice ServiceChoice, err error) error {
 		return nil
 	}
 
-	if tErr, ok := errors.AsType[*TransactionError](err); ok {
+	if tErr, ok := asType[*TransactionError](err); ok {
 		switch {
 		case errors.Is(tErr.Err, ErrRemoteError):
 			e := RemoteErrorAPDU{

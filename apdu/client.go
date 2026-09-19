@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"fmt"
 	"slices"
+	"time"
 
 	"github.com/worldiety/bacnet/common/errors"
 	"github.com/worldiety/bacnet/common/log"
@@ -52,6 +53,9 @@ type Client interface {
 	// WhoHas sends an unconfirmed Who-Has request.
 	WhoHas(ctx context.Context, dst netprim.Address, req WhoHasRequest) error
 
+	// TimeSynchronization sends local or UTC date/time as an unconfirmed request.
+	TimeSynchronization(ctx context.Context, dst netprim.Address, instant time.Time, utc bool) error
+
 	// InvokeConfirmedRaw sends a confirmed request and returns the raw service-ack payload.
 	// For SimpleACK this returns nil, nil.
 	InvokeConfirmedRaw(ctx context.Context, dst netprim.Address, serviceChoice ServiceChoice, payload []byte) ([]byte, error)
@@ -97,6 +101,31 @@ type Client interface {
 
 	// HandleUnconfirmedCOVNotificationMultiple registers a typed handler for inbound unconfirmed multiple COV notifications.
 	HandleUnconfirmedCOVNotificationMultiple(handler UnconfirmedCOVNotificationMultipleHandler) error
+}
+
+func (c *clientImpl) TimeSynchronization(ctx context.Context, dst netprim.Address, instant time.Time, utc bool) error {
+	payload, err := bacencoding.EncodeDateTimeValue(bacencoding.BACnetDateTime{
+		Date: bacencoding.BACnetDate{
+			Year: uint16(instant.Year()), Month: uint8(instant.Month()), Day: uint8(instant.Day()),
+			Weekday: uint8(instant.Weekday()+6)%7 + 1,
+		},
+		Time: bacencoding.BACnetTime{
+			Hour: uint8(instant.Hour()), Minute: uint8(instant.Minute()), Second: uint8(instant.Second()),
+			Hundredths: uint8(instant.Nanosecond() / 10_000_000),
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("encode time-synchronization: %w", err)
+	}
+	choice := ServiceChoiceTimeSynchronization
+	if utc {
+		choice = ServiceChoiceUTCTimeSynchronization
+	}
+	return c.ue.SendUnconfirmed(ctx, UnconfirmedRequestICI{
+		Destination:    dst,
+		Priority:       c.cfg.Priority,
+		ServiceRequest: UnconfirmedRequest{ServiceChoice: choice, Payload: payload},
+	})
 }
 
 // ConfirmedCodec describes a typed confirmed service codec.
@@ -310,7 +339,7 @@ func NewWhoHasByObjectName(
 		HighLimit: highLimit,
 		ObjectName: func() *string {
 			v := objectName
-			return new(v)
+			return ptr(v)
 		}(),
 	}
 

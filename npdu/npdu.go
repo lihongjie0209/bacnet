@@ -300,7 +300,7 @@ func (n *NetworkLayerProtocolDataUnit) Valid() bool {
 	if msgTypePresent {
 		header := NetworkLayerMessageHeader{MessageType: NetworkLayerMessageType(*n.messageType)}
 		if n.vendorId != nil {
-			header.VendorID = new(*n.vendorId)
+			header.VendorID = ptr(*n.vendorId)
 		}
 
 		if err := validateNetworkLayerMessagePayload(header, n.apdu); err != nil {
@@ -482,13 +482,13 @@ func (n *NetworkLayerProtocolDataUnit) Decode(data []byte) error {
 			return fmt.Errorf("%w: truncated DNET/DLEN", ErrDecodeFailure)
 		}
 
-		res.dnet = new(UltimateDestinationNetworkNumber(binary.BigEndian.Uint16(data[i:])))
+		res.dnet = ptr(UltimateDestinationNetworkNumber(binary.BigEndian.Uint16(data[i:])))
 		if *res.dnet == 0 {
 			return errors.NewValidationError("dnet", *res.dnet, ErrInvalidNetworkNumber)
 		}
 		i += 2
 
-		res.dlen = new(UltimateDestinationNetworkNumberMacAddressLength(data[i]))
+		res.dlen = ptr(UltimateDestinationNetworkNumberMacAddressLength(data[i]))
 		i++
 
 		if *res.dlen > 0 {
@@ -540,7 +540,7 @@ func (n *NetworkLayerProtocolDataUnit) Decode(data []byte) error {
 		if i >= len(data) {
 			return fmt.Errorf("%w: truncated HopCount", ErrDecodeFailure)
 		}
-		res.hopCount = new(data[i])
+		res.hopCount = ptr(data[i])
 		i++
 	}
 
@@ -558,7 +558,7 @@ func (n *NetworkLayerProtocolDataUnit) Decode(data []byte) error {
 				return fmt.Errorf("%w: truncated VendorID", ErrDecodeFailure)
 			}
 
-			res.vendorId = new(binary.BigEndian.Uint16(data[i:]))
+			res.vendorId = ptr(binary.BigEndian.Uint16(data[i:]))
 			i += 2
 		}
 	}
@@ -570,7 +570,7 @@ func (n *NetworkLayerProtocolDataUnit) Decode(data []byte) error {
 	if nlMsg {
 		header := NetworkLayerMessageHeader{MessageType: NetworkLayerMessageType(*res.messageType)}
 		if res.vendorId != nil {
-			header.VendorID = new(*res.vendorId)
+			header.VendorID = ptr(*res.vendorId)
 		}
 		if err := validateNetworkLayerMessagePayload(header, res.apdu); err != nil {
 			log.Logger.Error("npdu decode validate network-layer payload", "error", err)
@@ -702,7 +702,7 @@ func NewProprietaryNetworkLayerMessage(messageType uint8, vendorID uint16, data 
 	}
 	return NewNetworkLayerNPDU(
 		NPCI{Priority: priority},
-		NetworkLayerMessageHeader{MessageType: NetworkLayerMessageType(messageType), VendorID: new(vendorID)},
+		NetworkLayerMessageHeader{MessageType: NetworkLayerMessageType(messageType), VendorID: ptr(vendorID)},
 		data,
 	)
 }
@@ -751,9 +751,9 @@ func NewNetworkLayerNPDU(npci NPCI, header NetworkLayerMessageHeader, payload []
 		return nil, err
 	}
 	n.flags |= isNetworkLayerMessageMask
-	n.messageType = new(uint8(header.MessageType))
+	n.messageType = ptr(uint8(header.MessageType))
 	if header.VendorID != nil {
-		n.vendorId = new(*header.VendorID)
+		n.vendorId = ptr(*header.VendorID)
 	}
 	n.apdu = normalizedPayload
 	return n, nil
@@ -809,7 +809,7 @@ func newNPDUWithNPCI(npci NPCI) (*NetworkLayerProtocolDataUnit, error) {
 
 		n.flags |= destinationSpecifierMask
 		n.dnet = &dnet
-		n.dlen = new(UltimateDestinationNetworkNumberMacAddressLength(dlen))
+		n.dlen = ptr(UltimateDestinationNetworkNumberMacAddressLength(dlen))
 		n.hopCount = &hopCount
 		if len(npci.Destination.DADR) > 0 {
 			n.dadr = slices.Clone(npci.Destination.DADR)
@@ -830,7 +830,7 @@ func newNPDUWithNPCI(npci NPCI) (*NetworkLayerProtocolDataUnit, error) {
 
 		n.flags |= sourceSpecifierMask
 		n.snet = &snet
-		n.slen = new(OriginalSourceNetworkNumberMacAddressLength(slen))
+		n.slen = ptr(OriginalSourceNetworkNumberMacAddressLength(slen))
 		n.sadr = slices.Clone(npci.Source.SADR)
 	}
 
@@ -912,7 +912,7 @@ func (n *NetworkLayerProtocolDataUnit) DNET() *UltimateDestinationNetworkNumber 
 		return nil
 	}
 
-	return new(*n.dnet)
+	return ptr(*n.dnet)
 }
 
 // DADR returns a defensive copy of the destination MAC-layer address.
@@ -929,7 +929,7 @@ func (n *NetworkLayerProtocolDataUnit) HopCount() *uint8 {
 	if n.hopCount == nil {
 		return nil
 	}
-	return new(*n.hopCount)
+	return ptr(*n.hopCount)
 }
 
 // SNET returns the source network number, or nil if the source specifier is absent.
@@ -937,7 +937,7 @@ func (n *NetworkLayerProtocolDataUnit) SNET() *OriginalSourceNetworkNumber {
 	if n.snet == nil {
 		return nil
 	}
-	return new(*n.snet)
+	return ptr(*n.snet)
 }
 
 // SADR returns a defensive copy of the source MAC-layer address.
@@ -955,7 +955,7 @@ func (n *NetworkLayerProtocolDataUnit) MessageType() *uint8 {
 	if n.messageType == nil {
 		return nil
 	}
-	return new(*n.messageType)
+	return ptr(*n.messageType)
 }
 
 // NetworkLayerHeader returns typed network-layer-message header metadata, or nil
@@ -966,7 +966,7 @@ func (n *NetworkLayerProtocolDataUnit) NetworkLayerHeader() *NetworkLayerMessage
 	}
 	h := NetworkLayerMessageHeader{MessageType: NetworkLayerMessageType(*n.messageType)}
 	if n.vendorId != nil {
-		h.VendorID = new(*n.vendorId)
+		h.VendorID = ptr(*n.vendorId)
 	}
 	return &h
 }
@@ -1026,7 +1026,7 @@ func (n *NetworkLayerProtocolDataUnit) VendorID() *uint16 {
 	if n.vendorId == nil {
 		return nil
 	}
-	return new(*n.vendorId)
+	return ptr(*n.vendorId)
 }
 
 // APDUBytes returns a defensive copy of the APDU or network-layer-message data payload.

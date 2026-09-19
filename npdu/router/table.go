@@ -79,7 +79,7 @@ func (r *routerImpl) AddLearnedRoute(port PortID, network netprim.NetworkNumber,
 		portInfo:  nil,
 		kind:      RouteKindLearned,
 		lastSeen:  now,
-		expiresAt: new(now.Add(ttl)),
+		expiresAt: ptr(now.Add(ttl)),
 	})
 
 	return nil

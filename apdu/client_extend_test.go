@@ -168,15 +168,15 @@ func TestClientRemoteErrorMapping(t *testing.T) {
 				}
 				switch tt.wantType.(type) {
 				case RemoteErrorAPDU:
-					if _, ok := errors.AsType[RemoteErrorAPDU](err); !ok {
+					if _, ok := asType[RemoteErrorAPDU](err); !ok {
 						t.Fatalf("expected RemoteErrorAPDU, got %v", err)
 					}
 				case RemoteRejectAPDU:
-					if _, ok := errors.AsType[RemoteRejectAPDU](err); !ok {
+					if _, ok := asType[RemoteRejectAPDU](err); !ok {
 						t.Fatalf("expected RemoteRejectAPDU, got %v", err)
 					}
 				case RemoteAbortAPDU:
-					if _, ok := errors.AsType[RemoteAbortAPDU](err); !ok {
+					if _, ok := asType[RemoteAbortAPDU](err); !ok {
 						t.Fatalf("expected RemoteAbortAPDU, got %v", err)
 					}
 				}

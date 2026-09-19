@@ -62,7 +62,7 @@ func buildMessageForConformanceVector(name string) (NetworkLayerMessageModel, er
 	case "valid_00_who_is_router_any":
 		return NewWhoIsRouterToNetworkMessage(nil)
 	case "valid_00_who_is_router_dnet_100":
-		return NewWhoIsRouterToNetworkMessage(new(netprim.NetworkNumber(100)))
+		return NewWhoIsRouterToNetworkMessage(ptr(netprim.NetworkNumber(100)))
 	case "valid_01_i_am_router":
 		return NewIAmRouterToNetworkMessage([]netprim.NetworkNumber{100, 200})
 	case "valid_02_i_could_be_router":

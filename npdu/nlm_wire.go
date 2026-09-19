@@ -57,7 +57,7 @@ func DecodeNetworkLayerMessageWire(raw []byte) (NetworkLayerMessageModel, error)
 		if len(raw) < minProprietaryNetworkLayerMessageWireLen {
 			return nil, fmt.Errorf("%w: truncated proprietary vendor-id", ErrDecodeFailure)
 		}
-		header.VendorID = new(binary.BigEndian.Uint16(raw[offset:]))
+		header.VendorID = ptr(binary.BigEndian.Uint16(raw[offset:]))
 		offset += 2
 	}
 

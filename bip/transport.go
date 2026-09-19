@@ -60,7 +60,7 @@ func NewDatagramConn(addr netip.Addr) (DatagramConn, error) {
 		return nil, fmt.Errorf("failed to listen on %v: %w", udpAddr, err)
 	}
 
-	return new(connection{
+	return ptr(connection{
 		listener: conn,
 	}), nil
 }

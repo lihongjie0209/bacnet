@@ -46,7 +46,7 @@ func TestCopyPointersValue(t *testing.T) {
 		want *int
 	}{
 		{name: "nil", in: nil, want: nil},
-		{name: "int", in: new(10), want: new(10)},
+		{name: "int", in: ptr(10), want: ptr(10)},
 	}
 
 	for _, tt := range tests {

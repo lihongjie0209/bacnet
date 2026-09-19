@@ -1676,8 +1676,8 @@ func TestConfirmedServerMachineStartsSegmentedComplexACKResponseWithWindow(t *te
 	}
 
 	out, err := machine.Handle(machineEventResponseRequiresSegmentation, machineInput{
-		HandlerResult:       new(ServiceResult{Payload: payload}),
-		HandlerResponseType: new(ConfirmedResponseTypeACK),
+		HandlerResult:       ptr(ServiceResult{Payload: payload}),
+		HandlerResponseType: ptr(ConfirmedResponseTypeACK),
 	})
 	if err != nil {
 		t.Fatalf("Handle(response-requires-segmentation) error = %v", err)
@@ -1757,8 +1757,8 @@ func TestConfirmedServerMachineSegmentedComplexACKNegativeAckRetransmitsCurrentW
 
 	payload := make([]byte, 120)
 	if _, err := machine.Handle(machineEventResponseRequiresSegmentation, machineInput{
-		HandlerResult:       new(ServiceResult{Payload: payload}),
-		HandlerResponseType: new(ConfirmedResponseTypeACK),
+		HandlerResult:       ptr(ServiceResult{Payload: payload}),
+		HandlerResponseType: ptr(ConfirmedResponseTypeACK),
 	}); err != nil {
 		t.Fatalf("Handle(response-requires-segmentation) error = %v", err)
 	}
