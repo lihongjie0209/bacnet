@@ -219,7 +219,9 @@ func TestServiceChoiceClassifiers(t *testing.T) {
 			if !IsUnconfirmedServiceChoice(choice) {
 				t.Fatalf("IsUnconfirmedServiceChoice(%v) = false, want true", choice)
 			}
-			if choice != ServiceChoiceUnconfirmedTextMessage && choice != ServiceChoiceIHave && IsConfirmedServiceChoice(choice) {
+			if choice != ServiceChoiceIAm && choice != ServiceChoiceIHave &&
+				choice != ServiceChoiceUnconfirmedCOVNotification &&
+				choice != ServiceChoiceUnconfirmedTextMessage && IsConfirmedServiceChoice(choice) {
 				t.Fatalf("IsConfirmedServiceChoice(%v) = true, want false", choice)
 			}
 		})

@@ -87,6 +87,12 @@ type Client interface {
 	// SubscribeCOVProperty sends a confirmed SubscribeCOVProperty request and expects SimpleACK.
 	SubscribeCOVProperty(ctx context.Context, dst netprim.Address, req SubscribeCOVPropertyRequest) error
 
+	// AcknowledgeAlarm sends a standard alarm acknowledgement and expects SimpleACK.
+	AcknowledgeAlarm(ctx context.Context, dst netprim.Address, req AcknowledgeAlarmRequest) error
+
+	// GetEventInformation returns one server page of active event summaries.
+	GetEventInformation(ctx context.Context, dst netprim.Address, req GetEventInformationRequest) (GetEventInformationACK, error)
+
 	// HandleConfirmedCOVNotification registers a typed handler and sends a
 	// SimpleACK only after the handler accepts the decoded notification.
 	HandleConfirmedCOVNotification(handler ConfirmedCOVNotificationHandler) error
