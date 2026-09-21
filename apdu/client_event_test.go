@@ -294,6 +294,17 @@ func TestDecodeStandardEventParametersRejectsMalformedStandardChoice(t *testing.
 	}
 }
 
+func TestDecodeStandardEventParametersPreservesProprietaryChoice(t *testing.T) {
+	raw := encodeEventParameterBody(6, nil)
+	parameterType, fields, err := decodeStandardEventParameters(64, raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parameterType != "raw" || fields != nil {
+		t.Fatalf("type=%q fields=%#v", parameterType, fields)
+	}
+}
+
 func TestDecodeStandardEventParametersNestedAndApplicationChoices(t *testing.T) {
 	status := bacencoding.EncodeBitStringValue(bacencoding.NewBitString([]bool{false, true, false, true}))
 	appEnum, err := bacencoding.EncodeApplicationValue(bacencoding.AppEnum(2))
@@ -376,8 +387,160 @@ func TestDecodeStandardEventParametersNestedAndApplicationChoices(t *testing.T) 
 	}
 }
 
-func uint32Pointer(value uint32) *uint32    { return &value }
-func float32Pointer(value float32) *float32 { return &value }
+func TestDecodeStandardEventParametersExtendedReliabilityAndTimer(t *testing.T) {
+	status := bacencoding.EncodeBitStringValue(bacencoding.NewBitString([]bool{true, true, false, false}))
+	appReal, err := bacencoding.EncodeApplicationValue(bacencoding.AppReal(2.5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dateTime := bacencoding.BACnetDateTime{
+		Date: bacencoding.BACnetDate{Year: 2026, Month: 9, Day: 21, Weekday: 1},
+		Time: bacencoding.BACnetTime{Hour: 18, Minute: 30, Second: 0, Hundredths: 0},
+	}
+	encodedDateTime, err := bacencoding.EncodeDateTimeValue(dateTime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		eventType uint32
+		body      []byte
+		wantType  string
+		want      map[string]any
+	}{
+		{
+			name: "extended", eventType: 9, wantType: "extended",
+			body: joinEventParameterBytes(
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeUnsigned(42)),
+				bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeUnsigned(7)),
+				bacencoding.EncodeOpeningTag(2), appReal, bacencoding.EncodeClosingTag(2),
+			),
+			want: map[string]any{"vendorId": uint32(42), "extendedEventType": uint32(7), "parameters": []any{bacencoding.AppReal(2.5)}},
+		},
+		{
+			name: "change of reliability", eventType: 19, wantType: "change-of-reliability",
+			body: joinEventParameterBytes(
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeEnumeratedValue(12)),
+				bacencoding.EncodeContextPrimitive(1, status),
+				bacencoding.EncodeOpeningTag(2), bacencoding.EncodeClosingTag(2),
+			),
+			want: map[string]any{"reliability": uint32(12), "statusFlags": []bool{true, true, false, false}, "propertyValues": []COVPropertyValue{}},
+		},
+		{
+			name: "change of timer", eventType: 22, wantType: "change-of-timer",
+			body: joinEventParameterBytes(
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeEnumeratedValue(2)),
+				bacencoding.EncodeContextPrimitive(1, status),
+				bacencoding.EncodeOpeningTag(2), encodedDateTime, bacencoding.EncodeClosingTag(2),
+				bacencoding.EncodeContextPrimitive(3, bacencoding.EncodeEnumeratedValue(1)),
+				bacencoding.EncodeContextPrimitive(4, bacencoding.EncodeUnsigned(60)),
+				bacencoding.EncodeOpeningTag(5), encodedDateTime, bacencoding.EncodeClosingTag(5),
+			),
+			want: map[string]any{
+				"newState": uint32(2), "statusFlags": []bool{true, true, false, false}, "updateTime": dateTime,
+				"lastStateChange": uint32(1), "initialTimeout": uint32(60), "expirationTime": dateTime,
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parameterType, fields, err := decodeStandardEventParameters(test.eventType, encodeEventParameterBody(test.eventType, test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parameterType != test.wantType || !reflect.DeepEqual(fields, test.want) {
+				t.Fatalf("type=%q fields=%#v, want type=%q fields=%#v", parameterType, fields, test.wantType, test.want)
+			}
+		})
+	}
+}
+
+func TestDecodeStandardEventParametersComplexBufferAndAccess(t *testing.T) {
+	object, _ := types.NewObjectIdentifier(types.ObjectTypeAnalogInput, 5)
+	device, _ := types.NewObjectIdentifier(types.ObjectTypeDevice, 42)
+	credential, _ := types.NewObjectIdentifier(types.ObjectType(32), 7)
+	appReal, err := bacencoding.EncodeApplicationValue(bacencoding.AppReal(4.5))
+	if err != nil {
+		t.Fatal(err)
+	}
+	propertyValue := joinEventParameterBytes(
+		bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeEnumeratedValue(85)),
+		bacencoding.EncodeOpeningTag(2), appReal, bacencoding.EncodeClosingTag(2),
+	)
+	status := bacencoding.EncodeBitStringValue(bacencoding.NewBitString([]bool{false, false, true, true}))
+	accessTime, err := encodeContextTimestamp(3, Timestamp{Kind: TimestampSequence, Sequence: 99})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name      string
+		eventType uint32
+		body      []byte
+		wantType  string
+		want      map[string]any
+	}{
+		{
+			name: "complex event", eventType: 6, wantType: "complex-event-type", body: propertyValue,
+			want: map[string]any{"propertyValues": []COVPropertyValue{{PropertyIdentifier: 85, Value: appReal}}},
+		},
+		{
+			name: "buffer ready", eventType: 10, wantType: "buffer-ready",
+			body: joinEventParameterBytes(
+				bacencoding.EncodeOpeningTag(0),
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeObjectIdentifierValue(object)),
+				bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeEnumeratedValue(85)),
+				bacencoding.EncodeContextPrimitive(2, bacencoding.EncodeUnsigned(3)),
+				bacencoding.EncodeContextPrimitive(3, bacencoding.EncodeObjectIdentifierValue(device)),
+				bacencoding.EncodeClosingTag(0),
+				bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeUnsigned(8)),
+				bacencoding.EncodeContextPrimitive(2, bacencoding.EncodeUnsigned(9)),
+			),
+			want: map[string]any{
+				"bufferProperty":       EventDeviceObjectPropertyReference{ObjectIdentifier: object, PropertyIdentifier: 85, ArrayIndex: uint32Pointer(3), DeviceIdentifier: objectIdentifierPointer(device)},
+				"previousNotification": uint32(8), "currentNotification": uint32(9),
+			},
+		},
+		{
+			name: "access event", eventType: 13, wantType: "access-event",
+			body: joinEventParameterBytes(
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeEnumeratedValue(2)),
+				bacencoding.EncodeContextPrimitive(1, status),
+				bacencoding.EncodeContextPrimitive(2, bacencoding.EncodeUnsigned(11)),
+				accessTime,
+				bacencoding.EncodeOpeningTag(4),
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeObjectIdentifierValue(device)),
+				bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeObjectIdentifierValue(credential)),
+				bacencoding.EncodeClosingTag(4),
+				bacencoding.EncodeOpeningTag(5),
+				bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeEnumeratedValue(1)),
+				bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeUnsigned(2)),
+				bacencoding.EncodeContextPrimitive(2, []byte{0xaa, 0xbb}),
+				bacencoding.EncodeClosingTag(5),
+			),
+			want: map[string]any{
+				"accessEvent": uint32(2), "statusFlags": []bool{false, false, true, true}, "accessEventTag": uint32(11),
+				"accessEventTime":      Timestamp{Kind: TimestampSequence, Sequence: 99},
+				"accessCredential":     EventDeviceObjectReference{DeviceIdentifier: objectIdentifierPointer(device), ObjectIdentifier: credential},
+				"authenticationFactor": EventAuthenticationFactor{FormatType: 1, FormatClass: 2, Value: []byte{0xaa, 0xbb}},
+			},
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			parameterType, fields, err := decodeStandardEventParameters(test.eventType, encodeEventParameterBody(test.eventType, test.body))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if parameterType != test.wantType || !reflect.DeepEqual(fields, test.want) {
+				t.Fatalf("type=%q fields=%#v, want type=%q fields=%#v", parameterType, fields, test.wantType, test.want)
+			}
+		})
+	}
+}
+
+func uint32Pointer(value uint32) *uint32                                           { return &value }
+func float32Pointer(value float32) *float32                                        { return &value }
+func objectIdentifierPointer(value types.ObjectIdentifier) *types.ObjectIdentifier { return &value }
 
 func joinEventParameterBytes(parts ...[]byte) []byte {
 	var out []byte

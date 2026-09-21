@@ -115,6 +115,27 @@ type EventChangeValue struct {
 	Real *float32
 }
 
+// EventDeviceObjectPropertyReference is BACnetDeviceObjectPropertyReference.
+type EventDeviceObjectPropertyReference struct {
+	ObjectIdentifier   types.ObjectIdentifier
+	PropertyIdentifier types.PropertyIdentifier
+	ArrayIndex         *uint32
+	DeviceIdentifier   *types.ObjectIdentifier
+}
+
+// EventDeviceObjectReference is BACnetDeviceObjectReference.
+type EventDeviceObjectReference struct {
+	DeviceIdentifier *types.ObjectIdentifier
+	ObjectIdentifier types.ObjectIdentifier
+}
+
+// EventAuthenticationFactor is the optional access-event credential factor.
+type EventAuthenticationFactor struct {
+	FormatType  uint32
+	FormatClass uint32
+	Value       []byte
+}
+
 type UnconfirmedEventNotificationHandler func(context.Context, EventNotificationIndication) error
 type ConfirmedEventNotificationHandler func(context.Context, EventNotificationIndication) error
 
@@ -653,6 +674,164 @@ func (d *eventParameterDecoder) application(tag bacencoding.AppTag) (bacencoding
 	}
 	return value, nil
 }
+func (d *eventParameterDecoder) applicationList(tag bacencoding.AppTag) ([]any, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]any, 0)
+	for offset := 0; offset < len(body); {
+		if isOpeningTagAt(body, offset, 0) {
+			start, end, next, decodeErr := decodeConstructedContent(body, offset, 0)
+			if decodeErr != nil {
+				return nil, decodeErr
+			}
+			value, valueNext, decodeErr := decodeCOVPropertyValue(body[start:end], 0)
+			if decodeErr != nil || valueNext != end-start {
+				return nil, fmt.Errorf("%w: invalid extended property value", ErrDecodeFailure)
+			}
+			values = append(values, value)
+			offset = next
+			continue
+		}
+		value, next, decodeErr := bacencoding.DecodeApplicationValue(body, offset)
+		if decodeErr != nil || next <= offset {
+			return nil, fmt.Errorf("%w: invalid extended application parameter", ErrDecodeFailure)
+		}
+		values = append(values, value)
+		offset = next
+	}
+	return values, nil
+}
+func (d *eventParameterDecoder) propertyValueList(tag bacencoding.AppTag) ([]COVPropertyValue, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return nil, err
+	}
+	values := make([]COVPropertyValue, 0)
+	for offset := 0; offset < len(body); {
+		value, next, decodeErr := decodeCOVPropertyValue(body, offset)
+		if decodeErr != nil || next <= offset {
+			return nil, fmt.Errorf("%w: invalid event property value", ErrDecodeFailure)
+		}
+		values = append(values, value)
+		offset = next
+	}
+	return values, nil
+}
+func (d *eventParameterDecoder) dateTime(tag bacencoding.AppTag) (bacencoding.BACnetDateTime, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return bacencoding.BACnetDateTime{}, err
+	}
+	return bacencoding.DecodeDateTimeValue(body)
+}
+func (d *eventParameterDecoder) propertyValueSequence() ([]COVPropertyValue, error) {
+	values := make([]COVPropertyValue, 0)
+	for d.offset < d.end {
+		value, next, err := decodeCOVPropertyValue(d.payload[:d.end], d.offset)
+		if err != nil || next <= d.offset {
+			return nil, fmt.Errorf("%w: invalid complex event property value", ErrDecodeFailure)
+		}
+		values = append(values, value)
+		d.offset = next
+	}
+	return values, nil
+}
+func (d *eventParameterDecoder) deviceObjectPropertyReference(tag bacencoding.AppTag) (EventDeviceObjectPropertyReference, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return EventDeviceObjectPropertyReference{}, err
+	}
+	object, offset, err := decodeExpectedContextObjectIdentifier(body, 0, 0)
+	if err != nil {
+		return EventDeviceObjectPropertyReference{}, err
+	}
+	_, rawProperty, next, err := bacencoding.DecodeExpectedContextPrimitive(body, offset, 1)
+	if err != nil {
+		return EventDeviceObjectPropertyReference{}, err
+	}
+	property, err := bacencoding.DecodeEnumeratedValue(rawProperty)
+	if err != nil {
+		return EventDeviceObjectPropertyReference{}, err
+	}
+	out := EventDeviceObjectPropertyReference{ObjectIdentifier: object, PropertyIdentifier: types.PropertyIdentifier(property)}
+	offset = next
+	if hasContextPrimitive(body, offset, 2) {
+		_, raw, after, decodeErr := bacencoding.DecodeExpectedContextPrimitive(body, offset, 2)
+		if decodeErr != nil {
+			return EventDeviceObjectPropertyReference{}, decodeErr
+		}
+		value, decodeErr := bacencoding.DecodeUnsigned(raw)
+		if decodeErr != nil {
+			return EventDeviceObjectPropertyReference{}, decodeErr
+		}
+		out.ArrayIndex, offset = &value, after
+	}
+	if hasContextPrimitive(body, offset, 3) {
+		value, after, decodeErr := decodeExpectedContextObjectIdentifier(body, offset, 3)
+		if decodeErr != nil || value.ObjectType() != types.ObjectTypeDevice {
+			return EventDeviceObjectPropertyReference{}, fmt.Errorf("%w: invalid reference device identifier", ErrDecodeFailure)
+		}
+		out.DeviceIdentifier, offset = &value, after
+	}
+	if offset != len(body) {
+		return EventDeviceObjectPropertyReference{}, fmt.Errorf("%w: trailing property-reference bytes", ErrDecodeFailure)
+	}
+	return out, nil
+}
+func (d *eventParameterDecoder) deviceObjectReference(tag bacencoding.AppTag) (EventDeviceObjectReference, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return EventDeviceObjectReference{}, err
+	}
+	out := EventDeviceObjectReference{}
+	offset := 0
+	if hasContextPrimitive(body, offset, 0) {
+		value, next, decodeErr := decodeExpectedContextObjectIdentifier(body, offset, 0)
+		if decodeErr != nil || value.ObjectType() != types.ObjectTypeDevice {
+			return EventDeviceObjectReference{}, fmt.Errorf("%w: invalid object-reference device identifier", ErrDecodeFailure)
+		}
+		out.DeviceIdentifier, offset = &value, next
+	}
+	value, next, err := decodeExpectedContextObjectIdentifier(body, offset, 1)
+	if err != nil || next != len(body) {
+		return EventDeviceObjectReference{}, fmt.Errorf("%w: invalid object reference", ErrDecodeFailure)
+	}
+	out.ObjectIdentifier = value
+	return out, nil
+}
+func (d *eventParameterDecoder) authenticationFactor(tag bacencoding.AppTag) (EventAuthenticationFactor, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return EventAuthenticationFactor{}, err
+	}
+	decode := func(offset int, expected bacencoding.AppTag) ([]byte, int, error) {
+		_, raw, next, decodeErr := bacencoding.DecodeExpectedContextPrimitive(body, offset, expected)
+		return raw, next, decodeErr
+	}
+	rawType, offset, err := decode(0, 0)
+	if err != nil {
+		return EventAuthenticationFactor{}, err
+	}
+	formatType, err := bacencoding.DecodeEnumeratedValue(rawType)
+	if err != nil {
+		return EventAuthenticationFactor{}, err
+	}
+	rawClass, offset, err := decode(offset, 1)
+	if err != nil {
+		return EventAuthenticationFactor{}, err
+	}
+	formatClass, err := bacencoding.DecodeUnsigned(rawClass)
+	if err != nil {
+		return EventAuthenticationFactor{}, err
+	}
+	value, offset, err := decode(offset, 2)
+	if err != nil || offset != len(body) {
+		return EventAuthenticationFactor{}, fmt.Errorf("%w: invalid authentication factor", ErrDecodeFailure)
+	}
+	return EventAuthenticationFactor{FormatType: formatType, FormatClass: formatClass, Value: slices.Clone(value)}, nil
+}
 func (d *eventParameterDecoder) propertyState(tag bacencoding.AppTag) (EventPropertyState, error) {
 	body, err := d.constructed(tag)
 	if err != nil {
@@ -733,6 +912,9 @@ func (d *eventParameterDecoder) finish() error {
 }
 
 func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[string]any, error) {
+	if eventType >= 64 {
+		return "raw", nil, nil
+	}
 	d, err := newEventParameterDecoder(eventType, raw)
 	if err != nil {
 		return "", nil, err
@@ -798,6 +980,11 @@ func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[st
 			fields["exceededLimit"], err = d.real(3)
 		}
 		return finishEventParameters(d, "out-of-range", fields, err)
+	case 6:
+		fields["propertyValues"], err = d.propertyValueSequence()
+		return finishEventParameters(d, "complex-event-type", fields, err)
+	case 7, 12:
+		return "", nil, fmt.Errorf("%w: reserved event type %d", ErrDecodeFailure, eventType)
 	case 8:
 		fields["newState"], err = d.unsigned(0)
 		if err == nil {
@@ -810,6 +997,29 @@ func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[st
 			fields["operationExpected"], err = d.unsigned(3)
 		}
 		return finishEventParameters(d, "change-of-life-safety", fields, err)
+	case 9:
+		fields["vendorId"], err = d.unsigned(0)
+		if err == nil {
+			if fields["vendorId"].(uint32) > 65535 {
+				err = fmt.Errorf("%w: extended vendor ID exceeds 65535", ErrDecodeFailure)
+			}
+		}
+		if err == nil {
+			fields["extendedEventType"], err = d.unsigned(1)
+		}
+		if err == nil {
+			fields["parameters"], err = d.applicationList(2)
+		}
+		return finishEventParameters(d, "extended", fields, err)
+	case 10:
+		fields["bufferProperty"], err = d.deviceObjectPropertyReference(0)
+		if err == nil {
+			fields["previousNotification"], err = d.unsigned(1)
+		}
+		if err == nil {
+			fields["currentNotification"], err = d.unsigned(2)
+		}
+		return finishEventParameters(d, "buffer-ready", fields, err)
 	case 11:
 		fields["exceedingValue"], err = d.unsigned(0)
 		if err == nil {
@@ -819,6 +1029,26 @@ func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[st
 			fields["exceededLimit"], err = d.unsigned(2)
 		}
 		return finishEventParameters(d, "unsigned-range", fields, err)
+	case 13:
+		fields["accessEvent"], err = d.unsigned(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["accessEventTag"], err = d.unsigned(2)
+		}
+		if err == nil {
+			var next int
+			fields["accessEventTime"], next, err = decodeContextTimestamp(d.payload[:d.end], d.offset, 3)
+			d.offset = next
+		}
+		if err == nil {
+			fields["accessCredential"], err = d.deviceObjectReference(4)
+		}
+		if err == nil && d.offset < d.end && isOpeningTagAt(d.payload, d.offset, 5) {
+			fields["authenticationFactor"], err = d.authenticationFactor(5)
+		}
+		return finishEventParameters(d, "access-event", fields, err)
 	case 14:
 		fields["exceedingValue"], err = d.double(0)
 		if err == nil {
@@ -872,6 +1102,15 @@ func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[st
 			fields["referencedFlags"], err = d.bits(1, 4)
 		}
 		return finishEventParameters(d, "change-of-status-flags", fields, err)
+	case 19:
+		fields["reliability"], err = d.unsigned(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["propertyValues"], err = d.propertyValueList(2)
+		}
+		return finishEventParameters(d, "change-of-reliability", fields, err)
 	case 20:
 		return finishEventParameters(d, "none", fields, nil)
 	case 21:
@@ -880,6 +1119,24 @@ func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[st
 			err = status(1)
 		}
 		return finishEventParameters(d, "change-of-discrete-value", fields, err)
+	case 22:
+		fields["newState"], err = d.unsigned(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["updateTime"], err = d.dateTime(2)
+		}
+		if err == nil && hasContextPrimitive(d.payload[:d.end], d.offset, 3) {
+			fields["lastStateChange"], err = d.unsigned(3)
+		}
+		if err == nil && hasContextPrimitive(d.payload[:d.end], d.offset, 4) {
+			fields["initialTimeout"], err = d.unsigned(4)
+		}
+		if err == nil && d.offset < d.end && isOpeningTagAt(d.payload, d.offset, 5) {
+			fields["expirationTime"], err = d.dateTime(5)
+		}
+		return finishEventParameters(d, "change-of-timer", fields, err)
 	default:
 		return "raw", nil, nil
 	}
