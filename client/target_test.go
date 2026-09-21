@@ -114,6 +114,9 @@ func TestParseProperty(t *testing.T) {
 		{"protocol-revision", 139},
 		{"85", 85},
 		{"object-list", 76},
+		{"limit-enable", 52},
+		{"event-enable", 35},
+		{"notify-type", 72},
 	}
 	for _, tt := range tests {
 		t.Run(tt.in, func(t *testing.T) {
