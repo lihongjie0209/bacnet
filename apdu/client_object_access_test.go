@@ -1,6 +1,7 @@
 package apdu
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -228,6 +229,27 @@ func TestWriteRequestsAllowEmptySequencePropertyValue(t *testing.T) {
 		Values:           []PropertyValueWrite{{PropertyIdentifier: 23, PropertyValue: []byte{}}},
 	}}); err != nil {
 		t.Fatalf("NewWritePropertyMultipleRequest(empty sequence): %v", err)
+	}
+}
+
+func TestEncodeWritePropertyMultipleRequestGolden(t *testing.T) {
+	object, err := types.NewObjectIdentifier(types.ObjectTypeAnalogValue, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := encodeWritePropertyMultipleRequestPayload(WritePropertyMultipleRequest{Writes: []WriteAccessSpecification{{
+		ObjectIdentifier: object,
+		Values:           []PropertyValueWrite{{PropertyIdentifier: types.PropertyIdentifierPresentValue, PropertyValue: []byte{0x44, 0x41, 0xa0, 0x00, 0x00}}},
+	}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// WriteAccessSpecification has no outer wrapper: object-identifier [0],
+	// opening list-of-properties [1], property-id [0], opening value [2],
+	// Real 20.0, closing value [2], closing list [1].
+	want := []byte{0x0c, 0x00, 0x80, 0x00, 0x01, 0x1e, 0x09, 0x55, 0x2e, 0x44, 0x41, 0xa0, 0x00, 0x00, 0x2f, 0x1f}
+	if !bytes.Equal(payload, want) {
+		t.Fatalf("payload = %x, want %x", payload, want)
 	}
 }
 

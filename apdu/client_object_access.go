@@ -570,7 +570,6 @@ func encodeWritePropertyMultipleRequestPayload(req WritePropertyMultipleRequest)
 	out := make([]byte, 0, 64)
 
 	for _, spec := range req.Writes {
-		out = append(out, encodeOpeningTag(0)...)
 		objRaw := uint32(spec.ObjectIdentifier)
 		out = append(out, encodeContextPrimitive(0, []byte{byte(objRaw >> 24), byte(objRaw >> 16), byte(objRaw >> 8), byte(objRaw)})...)
 		out = append(out, encodeOpeningTag(1)...)
@@ -587,7 +586,6 @@ func encodeWritePropertyMultipleRequestPayload(req WritePropertyMultipleRequest)
 			}
 		}
 		out = append(out, encodeClosingTag(1)...)
-		out = append(out, encodeClosingTag(0)...)
 	}
 
 	return out, nil
