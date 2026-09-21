@@ -58,7 +58,7 @@ func (t Target) String() string {
 	if t.isID {
 		return fmt.Sprintf("device %d", t.instance)
 	}
-	return t.addr.AddrPort.String()
+	return t.addr.String()
 }
 
 // ParseTarget parses a device reference, auto-detecting whether it is a BACnet

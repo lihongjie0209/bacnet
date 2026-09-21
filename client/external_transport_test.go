@@ -32,6 +32,10 @@ func TestNewWithTransportAndTargetAddress(t *testing.T) {
 	if target.IsID() || !target.addr.Equal(address) {
 		t.Fatalf("target = %#v", target)
 	}
+	native := TargetAddress(netprim.Address{Network: netprim.LocalNetwork, MAC: []byte{7}})
+	if got := native.String(); got != "local:07" {
+		t.Fatalf("native target string = %q", got)
+	}
 	if err = client.Close(); err != nil {
 		t.Fatal(err)
 	}

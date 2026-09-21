@@ -100,6 +100,9 @@ func (a Address) Equal(b Address) bool {
 // String renders the address for logs and diagnostics. Routed devices are shown
 // as "<network>:<mac>@<router-ip>"; local devices as their B/IP address.
 func (a Address) String() string {
+	if a.Network.IsLocal() && len(a.MAC) > 0 {
+		return fmt.Sprintf("local:%s", hex.EncodeToString(a.MAC))
+	}
 	if a.IsRouted() {
 		return fmt.Sprintf("%d:%s@%s", a.Network, hex.EncodeToString(a.MAC), a.AddrPort)
 	}
