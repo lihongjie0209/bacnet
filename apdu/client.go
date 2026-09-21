@@ -93,6 +93,13 @@ type Client interface {
 	// GetEventInformation returns one server page of active event summaries.
 	GetEventInformation(ctx context.Context, dst netprim.Address, req GetEventInformationRequest) (GetEventInformationACK, error)
 
+	// HandleConfirmedEventNotification registers a typed handler and emits
+	// SimpleACK only after the handler accepts the notification.
+	HandleConfirmedEventNotification(handler ConfirmedEventNotificationHandler) error
+
+	// HandleUnconfirmedEventNotification registers a typed event handler.
+	HandleUnconfirmedEventNotification(handler UnconfirmedEventNotificationHandler) error
+
 	// HandleConfirmedCOVNotification registers a typed handler and sends a
 	// SimpleACK only after the handler accepts the decoded notification.
 	HandleConfirmedCOVNotification(handler ConfirmedCOVNotificationHandler) error

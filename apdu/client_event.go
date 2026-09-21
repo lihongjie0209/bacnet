@@ -3,6 +3,7 @@ package apdu
 import (
 	"context"
 	"fmt"
+	"slices"
 	"unicode/utf8"
 
 	"github.com/worldiety/bacnet/common/errors"
@@ -73,6 +74,60 @@ type EventSummary struct {
 type GetEventInformationACK struct {
 	Events     []EventSummary
 	MoreEvents bool
+}
+
+// EventNotificationIndication is the common confirmed/unconfirmed event body.
+// RawParameters contains the exact encoded BACnetNotificationParameters choice,
+// including its event-type opening and closing tags.
+type EventNotificationIndication struct {
+	Source                     netprim.Address
+	ProcessIdentifier          uint32
+	InitiatingDeviceIdentifier types.ObjectIdentifier
+	EventObjectIdentifier      types.ObjectIdentifier
+	Timestamp                  Timestamp
+	NotificationClass          uint32
+	Priority                   uint8
+	EventType                  uint32
+	MessageText                *string
+	NotifyType                 uint32
+	AckRequired                bool
+	FromState                  *EventState
+	ToState                    EventState
+	RawParameters              []byte
+}
+
+type UnconfirmedEventNotificationHandler func(context.Context, EventNotificationIndication) error
+type ConfirmedEventNotificationHandler func(context.Context, EventNotificationIndication) error
+
+func (c *clientImpl) HandleConfirmedEventNotification(handler ConfirmedEventNotificationHandler) error {
+	if handler == nil {
+		return errors.NewValidationError("handler", nil, ErrHandlerNotFound)
+	}
+	return c.ue.HandleConfirmed(ServiceChoiceConfirmedEventNotification, func(ctx context.Context, indication ConfirmedIndicationICI) (ConfirmedResponseICI, error) {
+		decoded, err := decodeEventNotificationPayload(indication.ServiceRequest.Payload)
+		if err != nil {
+			return ConfirmedResponseICI{}, err
+		}
+		decoded.Source = indication.Source
+		if err := handler(ctx, decoded); err != nil {
+			return ConfirmedResponseICI{}, err
+		}
+		return ConfirmedResponseICI{Destination: indication.Source, InvokeID: indication.InvokeID, ServiceResponse: ServiceResult{}}, nil
+	})
+}
+
+func (c *clientImpl) HandleUnconfirmedEventNotification(handler UnconfirmedEventNotificationHandler) error {
+	if handler == nil {
+		return errors.NewValidationError("handler", nil, ErrHandlerNotFound)
+	}
+	return c.ue.HandleUnconfirmed(ServiceChoiceUnconfirmedEventNotification, func(ctx context.Context, indication UnconfirmedIndicationICI) error {
+		decoded, err := decodeEventNotificationPayload(indication.ServiceRequest.Payload)
+		if err != nil {
+			return err
+		}
+		decoded.Source = indication.Source
+		return handler(ctx, decoded)
+	})
 }
 
 // GetEventInformation requests one page and strictly decodes its ComplexACK.
@@ -377,4 +432,152 @@ func decodeBareTimestamp(payload []byte, offset int) (Timestamp, int, error) {
 	wrapped = append(wrapped[:choiceEnd], bacencoding.EncodeClosingTag(7)...)
 	decoded, _, err := decodeContextTimestamp(wrapped, 0, 7)
 	return decoded, offset + choiceEnd - choiceStart, err
+}
+
+func decodeEventNotificationPayload(payload []byte) (EventNotificationIndication, error) {
+	var out EventNotificationIndication
+	offset := 0
+	readUnsigned := func(tag bacencoding.AppTag) (uint32, error) {
+		_, raw, next, err := bacencoding.DecodeExpectedContextPrimitive(payload, offset, tag)
+		if err != nil {
+			return 0, err
+		}
+		value, err := bacencoding.DecodeUnsigned(raw)
+		if err == nil {
+			offset = next
+		}
+		return value, err
+	}
+	var err error
+	if out.ProcessIdentifier, err = readUnsigned(0); err != nil {
+		return EventNotificationIndication{}, err
+	}
+	if out.ProcessIdentifier == 0 {
+		return EventNotificationIndication{}, fmt.Errorf("%w: zero event process identifier", ErrDecodeFailure)
+	}
+	for tag, target := range []struct {
+		tag bacencoding.AppTag
+		out *types.ObjectIdentifier
+	}{{1, &out.InitiatingDeviceIdentifier}, {2, &out.EventObjectIdentifier}} {
+		_, raw, next, decodeErr := bacencoding.DecodeExpectedContextPrimitive(payload, offset, target.tag)
+		if decodeErr != nil {
+			return EventNotificationIndication{}, decodeErr
+		}
+		*target.out, decodeErr = bacencoding.DecodeObjectIdentifierValue(raw)
+		if decodeErr != nil || !target.out.ObjectType().Valid() {
+			return EventNotificationIndication{}, fmt.Errorf("%w: invalid event object at index %d", ErrDecodeFailure, tag)
+		}
+		offset = next
+	}
+	out.Timestamp, offset, err = decodeContextTimestamp(payload, offset, 3)
+	if err != nil {
+		return EventNotificationIndication{}, err
+	}
+	if out.NotificationClass, err = readUnsigned(4); err != nil {
+		return EventNotificationIndication{}, err
+	}
+	priority, err := readUnsigned(5)
+	if err != nil || priority > 255 {
+		return EventNotificationIndication{}, fmt.Errorf("%w: invalid event priority", ErrDecodeFailure)
+	}
+	out.Priority = uint8(priority)
+	if out.EventType, err = readUnsigned(6); err != nil || out.EventType > 65535 {
+		return EventNotificationIndication{}, fmt.Errorf("%w: invalid event type", ErrDecodeFailure)
+	}
+	if hasContextPrimitive(payload, offset, 7) {
+		_, raw, next, decodeErr := bacencoding.DecodeExpectedContextPrimitive(payload, offset, 7)
+		if decodeErr != nil {
+			return EventNotificationIndication{}, decodeErr
+		}
+		text, decodeErr := bacencoding.DecodeCharacterStringValue(raw)
+		if decodeErr != nil || len(raw) > 256 {
+			return EventNotificationIndication{}, fmt.Errorf("%w: invalid event message text", ErrDecodeFailure)
+		}
+		out.MessageText, offset = &text, next
+	}
+	if out.NotifyType, err = readUnsigned(8); err != nil || out.NotifyType > 2 {
+		return EventNotificationIndication{}, fmt.Errorf("%w: invalid notify type %d: %v", ErrDecodeFailure, out.NotifyType, err)
+	}
+	if out.NotifyType <= 1 {
+		if hasContextPrimitive(payload, offset, 9) {
+			_, raw, next, decodeErr := bacencoding.DecodeExpectedContextPrimitive(payload, offset, 9)
+			if decodeErr != nil || len(raw) != 1 || raw[0] > 1 {
+				return EventNotificationIndication{}, fmt.Errorf("%w: invalid ack-required", ErrDecodeFailure)
+			}
+			out.AckRequired, offset = raw[0] == 1, next
+		}
+		if hasContextPrimitive(payload, offset, 10) {
+			state, decodeErr := readUnsigned(10)
+			if decodeErr != nil || state > uint32(EventStateLifeSafetyAlarm) {
+				return EventNotificationIndication{}, fmt.Errorf("%w: invalid from-state", ErrDecodeFailure)
+			}
+			value := EventState(state)
+			out.FromState = &value
+		}
+	}
+	toState, err := readUnsigned(11)
+	if err != nil || toState > uint32(EventStateLifeSafetyAlarm) {
+		return EventNotificationIndication{}, fmt.Errorf("%w: invalid to-state", ErrDecodeFailure)
+	}
+	out.ToState = EventState(toState)
+	if out.NotifyType <= 1 {
+		contentStart, contentEnd, next, decodeErr := decodeConstructedContent(payload, offset, 12)
+		if decodeErr != nil {
+			return EventNotificationIndication{}, decodeErr
+		}
+		if contentStart == contentEnd {
+			return EventNotificationIndication{}, fmt.Errorf("%w: empty event parameters", ErrDecodeFailure)
+		}
+		choice, _, _, decodeErr := bacencoding.ParseTag(payload[contentStart:contentEnd])
+		if decodeErr != nil || !choice.Opening || (out.EventType < 64 && uint32(choice.TagNumber) != out.EventType) {
+			return EventNotificationIndication{}, fmt.Errorf("%w: event parameter choice mismatch", ErrDecodeFailure)
+		}
+		out.RawParameters = slices.Clone(payload[contentStart:contentEnd])
+		offset = next
+	}
+	if offset != len(payload) {
+		return EventNotificationIndication{}, fmt.Errorf("%w: trailing event notification bytes", ErrDecodeFailure)
+	}
+	return out, nil
+}
+
+func hasContextPrimitive(payload []byte, offset int, expected bacencoding.AppTag) bool {
+	if offset >= len(payload) {
+		return false
+	}
+	tag, _, _, err := bacencoding.ParseTag(payload[offset:])
+	return err == nil && tag.ContextSpecific && !tag.Opening && !tag.Closing && tag.TagNumber == expected
+}
+
+func decodeConstructedContent(payload []byte, offset int, expected bacencoding.AppTag) (int, int, int, error) {
+	contentStart, err := bacencoding.ExpectOpeningTag(payload, offset, expected)
+	if err != nil {
+		return offset, offset, offset, err
+	}
+	stack := []bacencoding.AppTag{expected}
+	position := contentStart
+	for position < len(payload) {
+		tag, header, valueLength, parseErr := bacencoding.ParseTag(payload[position:])
+		if parseErr != nil {
+			return offset, offset, offset, parseErr
+		}
+		if tag.Opening {
+			stack = append(stack, tag.TagNumber)
+			position += header
+			continue
+		}
+		if tag.Closing {
+			if len(stack) == 0 || stack[len(stack)-1] != tag.TagNumber {
+				return offset, offset, offset, fmt.Errorf("%w: mismatched closing tag %d", ErrDecodeFailure, tag.TagNumber)
+			}
+			stack = stack[:len(stack)-1]
+			if len(stack) == 0 {
+				return contentStart, position, position + header, nil
+			}
+			position += header
+			continue
+		}
+		position += header + valueLength
+	}
+	return offset, offset, offset, fmt.Errorf("%w: unterminated constructed tag %d", ErrDecodeFailure, expected)
 }

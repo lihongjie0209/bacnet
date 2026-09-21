@@ -125,3 +125,103 @@ func TestAcknowledgeAlarmRejectsInvalidBeforeIO(t *testing.T) {
 		t.Fatal("expected validation error")
 	}
 }
+
+func TestHandleEventNotificationsAndConfirmedACK(t *testing.T) {
+	for _, confirmed := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unconfirmed", true: "confirmed"}[confirmed], func(t *testing.T) {
+			transport := newTestNPDUTransport()
+			ase, _ := NewASE(ASEConfig{InvokeTimeout: time.Second, MaxConcurrentInvokes: 4}, transport)
+			clientRaw, err := NewClient(ase, ClientConfig{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			client := clientRaw.(*clientImpl)
+			received := make(chan EventNotificationIndication, 1)
+			if confirmed {
+				err = client.HandleConfirmedEventNotification(func(_ context.Context, event EventNotificationIndication) error {
+					received <- event
+					return nil
+				})
+			} else {
+				err = client.HandleUnconfirmedEventNotification(func(_ context.Context, event EventNotificationIndication) error {
+					received <- event
+					return nil
+				})
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			source, _ := netprim.NewAddress(netprim.LocalNetwork, []byte{2})
+			pduType, choice := PDUTypeUnconfirmedRequest, ServiceChoiceUnconfirmedEventNotification
+			invokeID := InvokeID(0)
+			if confirmed {
+				pduType, choice, invokeID = PDUTypeConfirmedRequest, ServiceChoiceConfirmedEventNotification, 19
+			}
+			encoded, err := encodeAPDU(outboundAPDU{Type: pduType, InvokeID: invokeID, ServiceChoice: choice, Payload: eventNotificationPayloadForTest(t, 0)})
+			if err != nil {
+				t.Fatal(err)
+			}
+			packet, _ := npdu.NewLocalAPDU(netprim.NetworkPriorityNormal, confirmed, encoded)
+			if err := ase.OnInboundNPDU(context.Background(), source, *packet); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case event := <-received:
+				if event.ProcessIdentifier != 7 || event.Priority != 99 || event.EventType != 0 || event.ToState != EventStateOffnormal ||
+					event.MessageText == nil || *event.MessageText != "alarm" || !event.AckRequired || event.FromState == nil || len(event.RawParameters) == 0 || !event.Source.Equal(source) {
+					t.Fatalf("event = %#v", event)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("timeout waiting for event notification")
+			}
+			if confirmed {
+				sent := <-transport.ch
+				ack, err := decodeAPDU(sent.packet.APDUBytes())
+				if err != nil || ack.Type != PDUTypeSimpleACK || ack.InvokeID != invokeID || ack.ServiceChoice != choice {
+					t.Fatalf("ack=%#v err=%v", ack, err)
+				}
+			}
+		})
+	}
+}
+
+func TestDecodeEventNotificationRejectsChoiceMismatchAndTrailingData(t *testing.T) {
+	payload := eventNotificationPayloadForTest(t, 1)
+	if _, err := decodeEventNotificationPayload(payload); err == nil {
+		t.Fatal("expected event parameter choice mismatch")
+	}
+	payload = append(eventNotificationPayloadForTest(t, 0), 0)
+	if _, err := decodeEventNotificationPayload(payload); err == nil {
+		t.Fatal("expected trailing-byte rejection")
+	}
+}
+
+func eventNotificationPayloadForTest(t *testing.T, parameterChoice uint8) []byte {
+	t.Helper()
+	device, _ := types.NewObjectIdentifier(types.ObjectTypeDevice, 123)
+	object, _ := types.NewObjectIdentifier(types.ObjectTypeAnalogInput, 1)
+	payload := bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeUnsigned(7))
+	payload = append(payload, bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeObjectIdentifierValue(device))...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(2, bacencoding.EncodeObjectIdentifierValue(object))...)
+	timestamp, err := encodeContextTimestamp(3, Timestamp{Kind: TimestampSequence, Sequence: 11})
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload = append(payload, timestamp...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(4, bacencoding.EncodeUnsigned(4))...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(5, bacencoding.EncodeUnsigned(99))...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(6, bacencoding.EncodeEnumeratedValue(0))...)
+	message, _ := bacencoding.EncodeCharacterStringValue("alarm")
+	payload = append(payload, bacencoding.EncodeContextPrimitive(7, message)...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(8, bacencoding.EncodeEnumeratedValue(0))...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(9, []byte{1})...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(10, bacencoding.EncodeEnumeratedValue(uint32(EventStateNormal)))...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(11, bacencoding.EncodeEnumeratedValue(uint32(EventStateOffnormal)))...)
+	payload = append(payload, bacencoding.EncodeOpeningTag(12)...)
+	payload = append(payload, bacencoding.EncodeOpeningTag(parameterChoice)...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(0, bacencoding.EncodeBitStringValue(bacencoding.NewBitString([]bool{true})))...)
+	payload = append(payload, bacencoding.EncodeContextPrimitive(1, bacencoding.EncodeBitStringValue(bacencoding.NewBitString([]bool{false, false, false, false})))...)
+	payload = append(payload, bacencoding.EncodeClosingTag(parameterChoice)...)
+	payload = append(payload, bacencoding.EncodeClosingTag(12)...)
+	return payload
+}
