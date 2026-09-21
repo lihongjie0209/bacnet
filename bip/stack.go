@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/netip"
+	"sync"
 
 	"github.com/worldiety/bacnet/apdu"
 	"github.com/worldiety/bacnet/common/log"
@@ -25,7 +26,14 @@ import (
 //	defer ase.Close()
 //	go stack.Run(ctx, ase)
 type Stack struct {
-	transport *Transport
+	transport        *Transport
+	controlMu        sync.Mutex
+	controlResponses chan controlResponse
+}
+
+type controlResponse struct {
+	frame  Frame
+	sender netip.AddrPort
 }
 
 // NewStack constructs a Stack around an existing Transport.
@@ -34,7 +42,42 @@ func NewStack(transport *Transport) (*Stack, error) {
 	if transport == nil {
 		return nil, ErrNilTransport
 	}
-	return &Stack{transport: transport}, nil
+	return &Stack{transport: transport, controlResponses: make(chan controlResponse, 16)}, nil
+}
+
+// RequestBVLC sends one BVLC control frame and waits for a response with the
+// expected function from the same peer. Control requests are serialized so a
+// Result frame can never be correlated to the wrong operation.
+func (s *Stack) RequestBVLC(ctx context.Context, peer netip.AddrPort, request Frame, expected BVLCFunctionType) (Frame, error) {
+	if !peer.IsValid() || !peer.Addr().Is4() || peer.Port() == 0 {
+		return Frame{}, fmt.Errorf("invalid BACnet/IP control peer %s", peer)
+	}
+	if !expected.Valid() {
+		return Frame{}, ErrInvalidFunction
+	}
+	s.controlMu.Lock()
+	defer s.controlMu.Unlock()
+	for {
+		select {
+		case <-s.controlResponses:
+		default:
+			goto drained
+		}
+	}
+drained:
+	if err := s.transport.SendFrame(peer, request); err != nil {
+		return Frame{}, err
+	}
+	for {
+		select {
+		case <-ctx.Done():
+			return Frame{}, ctx.Err()
+		case response := <-s.controlResponses:
+			if response.sender == peer && response.frame.Function == expected {
+				return response.frame, nil
+			}
+		}
+	}
 }
 
 // SendNPDU implements apdu.NPDUTransport.
@@ -145,8 +188,12 @@ func (s *Stack) dispatchFrame(ctx context.Context, ase apdu.ASE, frame Frame, se
 		npduBytes = payload[6:]
 
 	default:
-		// BBMD control frames and other non-data function types are not relevant
-		// to the APDU layer; skip them silently.
+		// Deliver BBMD control responses to the serialized control requester.
+		// Unsolicited or excess responses are intentionally dropped.
+		select {
+		case s.controlResponses <- controlResponse{frame: frame, sender: senderAddr}:
+		default:
+		}
 		return nil
 	}
 

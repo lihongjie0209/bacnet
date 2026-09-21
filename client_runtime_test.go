@@ -115,6 +115,42 @@ func TestNewClientRuntimeWithConn(t *testing.T) {
 	}
 }
 
+func TestClientRuntimeRegisterForeignDeviceUsesSharedReceiveLoop(t *testing.T) {
+	conn := newRuntimeLoopbackConn()
+	runtime, err := NewClientRuntimeWithConn(conn, ClientRuntimeConfig{ASE: apdu.ASEConfig{InvokeTimeout: time.Second, MaxConcurrentInvokes: 4}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer runtime.Close()
+	peer := netip.MustParseAddrPort("192.0.2.10:47808")
+	conn.writeHook = func(data []byte, address netip.AddrPort) {
+		var request bip.RegisterForeignDevice
+		if decodeErr := request.Decode(data); decodeErr != nil {
+			t.Errorf("decode registration: %v", decodeErr)
+			return
+		}
+		if request.TTL() != 60 || address != peer {
+			t.Errorf("registration ttl=%d address=%s", request.TTL(), address)
+		}
+		result, _ := bip.NewBVLCResult(bip.ResultCodeSuccessfulCompletion)
+		response, _ := result.Encode()
+		conn.enqueueFrame(response, address)
+	}
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- runtime.Run(runCtx) }()
+	if err = runtime.RegisterForeignDevice(t.Context(), peer, 60); err != nil {
+		t.Fatal(err)
+	}
+	cancelRun()
+	_ = runtime.Close()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("runtime did not stop")
+	}
+}
+
 func TestClientRuntimeRunWritePropertyRoundTrip(t *testing.T) {
 	conn := newRuntimeLoopbackConn()
 	runtime, err := NewClientRuntimeWithConn(conn, ClientRuntimeConfig{

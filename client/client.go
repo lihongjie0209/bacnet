@@ -25,14 +25,17 @@ package client
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/worldiety/bacnet"
 	"github.com/worldiety/bacnet/apdu"
+	"github.com/worldiety/bacnet/bip"
 	baclog "github.com/worldiety/bacnet/common/log"
 )
 
@@ -71,10 +74,20 @@ type Config struct {
 	// to an address. Zero uses 2s.
 	ResolveWindow time.Duration
 
+	// ForeignDevice registers the client's existing BACnet/IP socket with a
+	// remote BBMD before New returns and renews it before its TTL expires.
+	ForeignDevice *ForeignDeviceConfig
+
 	// Logger, when non-nil, installs this logger as the library's global
 	// logger. When nil, library logging is discarded so the client is quiet by
 	// default. (The underlying library uses a single global logger.)
 	Logger *slog.Logger
+}
+
+type ForeignDeviceConfig struct {
+	BBMD        netip.AddrPort
+	TTL         time.Duration
+	RenewBefore time.Duration
 }
 
 func (c Config) timeout() time.Duration {
@@ -102,9 +115,14 @@ func (c Config) resolveWindow() time.Duration {
 // goroutine at a time for a given request; discovery operations may run
 // concurrently. Create one with New and release it with Close.
 type Client struct {
-	cfg    Config
-	rt     *bacnet.ClientRuntime
-	cancel context.CancelFunc
+	cfg        Config
+	rt         *bacnet.ClientRuntime
+	cancel     context.CancelFunc
+	wg         sync.WaitGroup
+	mu         sync.RWMutex
+	renewalErr error
+	closeOnce  sync.Once
+	closeErr   error
 
 	// apduClientOverride, when non-nil, supplies the APDU client instead of the
 	// runtime's. It exists so tests can inject a fake transport without a live
@@ -141,12 +159,88 @@ func New(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("create client runtime: %w", err)
 	}
 
+	foreign, err := validateForeignDeviceConfig(cfg.ForeignDevice)
+	if err != nil {
+		_ = rt.Close()
+		return nil, err
+	}
 	ctx, cancel := context.WithCancel(context.Background())
+	client := &Client{cfg: cfg, rt: rt, cancel: cancel}
+	client.wg.Add(1)
 	go func() {
+		defer client.wg.Done()
 		_ = rt.Run(ctx)
 	}()
+	if foreign != nil {
+		registerCtx, registerCancel := context.WithTimeout(ctx, cfg.timeout())
+		err = rt.RegisterForeignDevice(registerCtx, foreign.BBMD, foreign.ttl)
+		registerCancel()
+		if err != nil {
+			cancel()
+			_ = rt.Close()
+			client.wg.Wait()
+			return nil, fmt.Errorf("register BACnet foreign device: %w", err)
+		}
+		client.wg.Add(1)
+		go client.renewForeignDevice(ctx, foreign)
+	}
+	return client, nil
+}
 
-	return &Client{cfg: cfg, rt: rt, cancel: cancel}, nil
+type resolvedForeignDeviceConfig struct {
+	BBMD       netip.AddrPort
+	ttl        bip.TTL
+	renewEvery time.Duration
+}
+
+func validateForeignDeviceConfig(config *ForeignDeviceConfig) (*resolvedForeignDeviceConfig, error) {
+	if config == nil {
+		return nil, nil
+	}
+	if !config.BBMD.IsValid() || !config.BBMD.Addr().Is4() || config.BBMD.Port() == 0 {
+		return nil, errors.New("foreign device BBMD must be an IPv4 host:port")
+	}
+	if config.TTL < time.Second || config.TTL > 65535*time.Second || config.TTL%time.Second != 0 {
+		return nil, errors.New("foreign device TTL must be 1..65535 whole seconds")
+	}
+	if config.RenewBefore <= 0 || config.RenewBefore >= config.TTL {
+		return nil, errors.New("foreign device renewBefore must be positive and less than TTL")
+	}
+	return &resolvedForeignDeviceConfig{BBMD: config.BBMD, ttl: bip.TTL(config.TTL / time.Second), renewEvery: config.TTL - config.RenewBefore}, nil
+}
+
+func (c *Client) renewForeignDevice(ctx context.Context, config *resolvedForeignDeviceConfig) {
+	defer c.wg.Done()
+	timer := time.NewTimer(config.renewEvery)
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+			registerCtx, cancel := context.WithTimeout(ctx, c.cfg.timeout())
+			err := c.rt.RegisterForeignDevice(registerCtx, config.BBMD, config.ttl)
+			cancel()
+			if err != nil {
+				c.mu.Lock()
+				c.renewalErr = fmt.Errorf("renew BACnet foreign device: %w", err)
+				c.mu.Unlock()
+				_ = c.rt.Close()
+				return
+			}
+			timer.Reset(config.renewEvery)
+		}
+	}
+}
+
+// Health reports a terminal foreign-device renewal failure, if any.
+func (c *Client) Health() error {
+	if c == nil {
+		return errors.New("BACnet client is nil")
+	}
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.renewalErr
 }
 
 // Close stops the background receive loop and releases the UDP socket.
@@ -159,13 +253,16 @@ func (c *Client) Close() error {
 	if c == nil {
 		return nil
 	}
-	if c.cancel != nil {
-		c.cancel()
-	}
-	if c.rt != nil {
-		return c.rt.Close()
-	}
-	return nil
+	c.closeOnce.Do(func() {
+		if c.cancel != nil {
+			c.cancel()
+		}
+		if c.rt != nil {
+			c.closeErr = c.rt.Close()
+		}
+		c.wg.Wait()
+	})
+	return c.closeErr
 }
 
 // apduClient returns the underlying typed APDU client for advanced use.

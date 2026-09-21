@@ -3,6 +3,7 @@ package bacnet
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/netip"
 
 	"github.com/worldiety/bacnet/apdu"
@@ -111,6 +112,46 @@ func (r *ClientRuntime) Client() apdu.Client {
 // ASE returns the underlying APDU application service element.
 func (r *ClientRuntime) ASE() apdu.ASE {
 	return r.ase
+}
+
+// RegisterForeignDevice registers this runtime's existing UDP socket with a
+// remote IPv4 BBMD and validates its correlated BVLC Result response. Run must
+// be active so the shared receive loop can dispatch the response.
+func (r *ClientRuntime) RegisterForeignDevice(ctx context.Context, bbmd netip.AddrPort, ttl bip.TTL) error {
+	if r == nil || r.stack == nil {
+		return errors.New("BACnet client runtime is unavailable")
+	}
+	if !bbmd.IsValid() || !bbmd.Addr().Is4() || bbmd.Port() == 0 {
+		return fmt.Errorf("invalid BBMD address %s", bbmd)
+	}
+	request, err := bip.NewRegisterForeignDevice(ttl)
+	if err != nil {
+		return err
+	}
+	raw, err := request.Encode()
+	if err != nil {
+		return err
+	}
+	frame, err := bip.DecodeFrame(raw)
+	if err != nil {
+		return err
+	}
+	response, err := r.stack.RequestBVLC(ctx, bbmd, frame, bip.FunctionResult)
+	if err != nil {
+		return err
+	}
+	responseRaw, err := response.Encode()
+	if err != nil {
+		return err
+	}
+	var result bip.BVLCResult
+	if err = result.Decode(responseRaw); err != nil {
+		return err
+	}
+	if result.ResultCode() != bip.ResultCodeSuccessfulCompletion {
+		return fmt.Errorf("%w: %v", bip.ErrRegistrationRejected, result.ResultCode())
+	}
+	return nil
 }
 
 // Run starts the inbound receive loop and dispatches inbound frames to the ASE.

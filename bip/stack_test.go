@@ -56,6 +56,8 @@ func (p *pipeConn) ReadFromUDPAddrPort(buf []byte) (int, netip.AddrPort, error) 
 }
 
 func (p *pipeConn) WriteToUDPAddrPort(data []byte, addr netip.AddrPort) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 	if p.writeErr != nil {
 		return 0, p.writeErr
 	}
@@ -66,6 +68,12 @@ func (p *pipeConn) WriteToUDPAddrPort(data []byte, addr netip.AddrPort) (int, er
 		addr netip.AddrPort
 	}{data: d, addr: addr})
 	return len(data), nil
+}
+
+func (p *pipeConn) writeCount() int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return len(p.written)
 }
 
 func (p *pipeConn) Close() error {
@@ -261,6 +269,65 @@ func TestStackSendNPDUWriteError(t *testing.T) {
 	err := s.SendNPDU(context.Background(), dst, *pkt)
 	if !errors.Is(err, ErrWriteFailure) {
 		t.Fatalf("err = %v, want %v", err, ErrWriteFailure)
+	}
+}
+
+func TestStackRequestBVLCCorrelatesPeerAndFunction(t *testing.T) {
+	conn := &pipeConn{}
+	stack := mustStack(t, conn)
+	peer := netip.MustParseAddrPort("192.0.2.10:47808")
+	request, err := NewFrameWithType(BVLCTypeBACnetIP, FunctionRegisterForeignDevice, []byte{0, 60})
+	if err != nil {
+		t.Fatal(err)
+	}
+	type outcome struct {
+		frame Frame
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		frame, requestErr := stack.RequestBVLC(t.Context(), peer, request, FunctionResult)
+		done <- outcome{frame: frame, err: requestErr}
+	}()
+	deadline := time.Now().Add(time.Second)
+	for conn.writeCount() == 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if conn.writeCount() != 1 {
+		t.Fatal("control request was not sent")
+	}
+	result, _ := NewBVLCResult(ResultCodeSuccessfulCompletion)
+	raw, _ := result.Encode()
+	response, _ := DecodeFrame(raw)
+	if err = stack.dispatchFrame(t.Context(), &testASE{}, response, netip.MustParseAddrPort("192.0.2.11:47808")); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-done:
+		t.Fatal("accepted response from wrong peer")
+	case <-time.After(10 * time.Millisecond):
+	}
+	if err = stack.dispatchFrame(t.Context(), &testASE{}, response, peer); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case outcome := <-done:
+		if outcome.err != nil || outcome.frame.Function != FunctionResult {
+			t.Fatalf("outcome=%#v", outcome)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for correlated control response")
+	}
+}
+
+func TestStackRequestBVLCHonorsCancellation(t *testing.T) {
+	stack := mustStack(t, &pipeConn{})
+	request, _ := NewFrameWithType(BVLCTypeBACnetIP, FunctionReadForeignDeviceTable, nil)
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Millisecond)
+	defer cancel()
+	_, err := stack.RequestBVLC(ctx, netip.MustParseAddrPort("192.0.2.10:47808"), request, FunctionReadForeignDeviceTableAck)
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("err=%v", err)
 	}
 }
 
