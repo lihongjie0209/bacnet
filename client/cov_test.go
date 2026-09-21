@@ -52,10 +52,14 @@ func TestSubscribeCOVObjectPropertyAndCancel(t *testing.T) {
 	if err := client.SubscribeCOV(t.Context(), target, COVSubscription{ProcessID: 1, Object: object}); err != nil {
 		t.Fatal(err)
 	}
-	if len(fake.objects) != 2 || *fake.objects[0].Lifetime != 60 || *fake.objects[1].Lifetime != 0 {
+	if err := client.SubscribeCOV(t.Context(), target, COVSubscription{ProcessID: 2, Object: object, Property: &property, Increment: &increment}); err != nil {
+		t.Fatal(err)
+	}
+	if len(fake.objects) != 2 || *fake.objects[0].Lifetime != 60 || fake.objects[1].Lifetime != nil || fake.objects[1].IssueConfirmedNotifications != nil {
 		t.Fatalf("object requests = %#v", fake.objects)
 	}
-	if len(fake.properties) != 1 || !*fake.properties[0].IssueConfirmedNotifications || *fake.properties[0].COVIncrement != apdu.COVIncrement(0.5) {
+	if len(fake.properties) != 2 || !*fake.properties[0].IssueConfirmedNotifications || *fake.properties[0].COVIncrement != apdu.COVIncrement(0.5) ||
+		fake.properties[1].Lifetime != nil || fake.properties[1].IssueConfirmedNotifications != nil || fake.properties[1].COVIncrement != nil {
 		t.Fatalf("property requests = %#v", fake.properties)
 	}
 }

@@ -66,20 +66,26 @@ func (c *Client) SubscribeCOV(ctx context.Context, target Target, subscription C
 	defer cancel()
 	confirmed := subscription.Confirmed
 	lifetime := apdu.COVLifetime(subscription.Lifetime / time.Second)
+	var confirmedOption *bool
+	var lifetimeOption *apdu.COVLifetime
+	if subscription.Lifetime > 0 {
+		confirmedOption = &confirmed
+		lifetimeOption = &lifetime
+	}
 	if subscription.Property == nil {
-		req, err := apdu.NewSubscribeCOVRequest(apdu.SubscriberProcessIdentifier(subscription.ProcessID), subscription.Object.OID(), &confirmed, &lifetime)
+		req, err := apdu.NewSubscribeCOVRequest(apdu.SubscriberProcessIdentifier(subscription.ProcessID), subscription.Object.OID(), confirmedOption, lifetimeOption)
 		if err != nil {
 			return err
 		}
 		return c.apduClient().SubscribeCOV(requestCtx, dst, req)
 	}
 	var increment *apdu.COVIncrement
-	if subscription.Increment != nil {
+	if subscription.Lifetime > 0 && subscription.Increment != nil {
 		value := apdu.COVIncrement(*subscription.Increment)
 		increment = &value
 	}
 	req, err := apdu.NewSubscribeCOVPropertyRequest(
-		apdu.SubscriberProcessIdentifier(subscription.ProcessID), subscription.Object.OID(), &confirmed, &lifetime,
+		apdu.SubscriberProcessIdentifier(subscription.ProcessID), subscription.Object.OID(), confirmedOption, lifetimeOption,
 		apdu.MonitoredPropertyReference{PropertyIdentifier: *subscription.Property, ArrayIndex: subscription.ArrayIndex}, increment,
 	)
 	if err != nil {
