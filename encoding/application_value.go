@@ -266,8 +266,8 @@ func DecodeApplicationValue(raw []byte, offset int) (ApplicationValue, int, erro
 func EncodeApplicationValue(v ApplicationValue) ([]byte, error) {
 	switch val := v.(type) {
 	case AppRaw:
-		if len(val) == 0 || len(val) > MaxAppRawLength {
-			return nil, fmt.Errorf("%w: raw property value length %d must be between 1 and %d", ErrEncodeFailure, len(val), MaxAppRawLength)
+		if len(val) > MaxAppRawLength {
+			return nil, fmt.Errorf("%w: raw property value length %d must not exceed %d", ErrEncodeFailure, len(val), MaxAppRawLength)
 		}
 		return slices.Clone(val), nil
 

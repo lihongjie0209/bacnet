@@ -261,10 +261,20 @@ func TestEncodeApplicationValueRaw(t *testing.T) {
 }
 
 func TestEncodeApplicationValueRawRejectsInvalidSize(t *testing.T) {
-	for _, raw := range []AppRaw{nil, {}, make(AppRaw, MaxAppRawLength+1)} {
+	for _, raw := range []AppRaw{make(AppRaw, MaxAppRawLength+1)} {
 		if _, err := EncodeApplicationValue(raw); err == nil || !errors.Is(err, ErrEncodeFailure) {
 			t.Fatalf("EncodeApplicationValue(AppRaw length %d) error = %v, want ErrEncodeFailure", len(raw), err)
 		}
+	}
+}
+
+func TestEncodeApplicationValueRawAllowsEmptySequence(t *testing.T) {
+	encoded, err := EncodeApplicationValue(AppRaw{})
+	if err != nil {
+		t.Fatalf("EncodeApplicationValue(empty AppRaw): %v", err)
+	}
+	if len(encoded) != 0 {
+		t.Fatalf("encoded length = %d, want 0", len(encoded))
 	}
 }
 
