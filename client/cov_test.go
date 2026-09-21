@@ -13,10 +13,12 @@ import (
 
 type covAPDU struct {
 	apdu.Client
-	objects     []apdu.SubscribeCOVRequest
-	properties  []apdu.SubscribeCOVPropertyRequest
-	confirmed   apdu.ConfirmedCOVNotificationHandler
-	unconfirmed apdu.UnconfirmedCOVNotificationHandler
+	objects          []apdu.SubscribeCOVRequest
+	properties       []apdu.SubscribeCOVPropertyRequest
+	confirmed        apdu.ConfirmedCOVNotificationHandler
+	unconfirmed      apdu.UnconfirmedCOVNotificationHandler
+	acknowledgements []apdu.AcknowledgeAlarmRequest
+	eventRequests    []apdu.GetEventInformationRequest
 }
 
 func (f *covAPDU) SubscribeCOV(_ context.Context, _ netprim.Address, req apdu.SubscribeCOVRequest) error {
@@ -34,6 +36,14 @@ func (f *covAPDU) HandleConfirmedCOVNotification(handler apdu.ConfirmedCOVNotifi
 func (f *covAPDU) HandleUnconfirmedCOVNotification(handler apdu.UnconfirmedCOVNotificationHandler) error {
 	f.unconfirmed = handler
 	return nil
+}
+func (f *covAPDU) AcknowledgeAlarm(_ context.Context, _ netprim.Address, req apdu.AcknowledgeAlarmRequest) error {
+	f.acknowledgements = append(f.acknowledgements, req)
+	return nil
+}
+func (f *covAPDU) GetEventInformation(_ context.Context, _ netprim.Address, req apdu.GetEventInformationRequest) (apdu.GetEventInformationACK, error) {
+	f.eventRequests = append(f.eventRequests, req)
+	return apdu.GetEventInformationACK{MoreEvents: true}, nil
 }
 
 func TestSubscribeCOVObjectPropertyAndCancel(t *testing.T) {
@@ -61,6 +71,26 @@ func TestSubscribeCOVObjectPropertyAndCancel(t *testing.T) {
 	if len(fake.properties) != 2 || !*fake.properties[0].IssueConfirmedNotifications || *fake.properties[0].COVIncrement != apdu.COVIncrement(0.5) ||
 		fake.properties[1].Lifetime != nil || fake.properties[1].IssueConfirmedNotifications != nil || fake.properties[1].COVIncrement != nil {
 		t.Fatalf("property requests = %#v", fake.properties)
+	}
+}
+
+func TestAlarmAndEventRequestsUseResolvedTarget(t *testing.T) {
+	fake := &covAPDU{}
+	client := fakeClient(fake)
+	target := TargetAddr(netip4(t))
+	object := Object{Type: types.ObjectTypeAnalogValue, Instance: 7}.OID()
+	ack := apdu.AcknowledgeAlarmRequest{
+		ProcessIdentifier: 1, EventObjectIdentifier: object,
+		EventTimestamp:           apdu.Timestamp{Kind: apdu.TimestampSequence, Sequence: 1},
+		AcknowledgementSource:    "operator",
+		AcknowledgementTimestamp: apdu.Timestamp{Kind: apdu.TimestampSequence, Sequence: 2},
+	}
+	if err := client.AcknowledgeAlarm(t.Context(), target, ack); err != nil {
+		t.Fatal(err)
+	}
+	page, err := client.GetEventInformation(t.Context(), target, apdu.GetEventInformationRequest{LastReceivedObjectIdentifier: &object})
+	if err != nil || !page.MoreEvents || len(fake.acknowledgements) != 1 || len(fake.eventRequests) != 1 {
+		t.Fatalf("page=%#v ack=%d get=%d err=%v", page, len(fake.acknowledgements), len(fake.eventRequests), err)
 	}
 }
 
