@@ -215,6 +215,22 @@ func TestClientWritePropertyAndWritePropertyMultipleSimpleACK(t *testing.T) {
 	}
 }
 
+func TestWriteRequestsAllowEmptySequencePropertyValue(t *testing.T) {
+	object, err := types.NewObjectIdentifier(6, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = NewWritePropertyRequest(object, 23, nil, []byte{}, nil); err != nil {
+		t.Fatalf("NewWritePropertyRequest(empty sequence): %v", err)
+	}
+	if _, err = NewWritePropertyMultipleRequest([]WriteAccessSpecification{{
+		ObjectIdentifier: object,
+		Values:           []PropertyValueWrite{{PropertyIdentifier: 23, PropertyValue: []byte{}}},
+	}}); err != nil {
+		t.Fatalf("NewWritePropertyMultipleRequest(empty sequence): %v", err)
+	}
+}
+
 func TestPhase2RemoteErrorMapping(t *testing.T) {
 	tests := []struct {
 		name      string

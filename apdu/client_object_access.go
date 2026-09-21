@@ -441,9 +441,6 @@ func validateWritePropertyRequest(req WritePropertyRequest) error {
 	if !req.ObjectIdentifier.ObjectType().Valid() {
 		return bacneterrors.NewValidationError("object identifier", req.ObjectIdentifier, ErrEncodeFailure)
 	}
-	if len(req.PropertyValue) == 0 {
-		return bacneterrors.NewValidationError("property value", len(req.PropertyValue), ErrEncodeFailure)
-	}
 	if req.Priority != nil {
 		if *req.Priority == 0 || *req.Priority > 16 {
 			return bacneterrors.NewValidationError("priority", *req.Priority, ErrEncodeFailure)
@@ -536,9 +533,6 @@ func validateWritePropertyMultipleRequest(req WritePropertyMultipleRequest) erro
 			return bacneterrors.NewValidationError(fmt.Sprintf("writes[%d].values", i), len(spec.Values), ErrEncodeFailure)
 		}
 		for j, v := range spec.Values {
-			if len(v.PropertyValue) == 0 {
-				return bacneterrors.NewValidationError(fmt.Sprintf("writes[%d].values[%d].property value", i, j), len(v.PropertyValue), ErrEncodeFailure)
-			}
 			if v.Priority != nil {
 				if *v.Priority == 0 || *v.Priority > 16 {
 					return bacneterrors.NewValidationError(fmt.Sprintf("writes[%d].values[%d].priority", i, j), *v.Priority, ErrEncodeFailure)
