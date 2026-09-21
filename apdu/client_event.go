@@ -94,6 +94,25 @@ type EventNotificationIndication struct {
 	FromState                  *EventState
 	ToState                    EventState
 	RawParameters              []byte
+	ParameterType              string
+	Parameters                 map[string]any
+}
+
+// EventPropertyState preserves the BACnetPropertyState choice and value.
+// Exactly one value pointer is non-nil.
+type EventPropertyState struct {
+	Choice     uint32
+	Boolean    *bool
+	Integer    *int32
+	Unsigned   *uint32
+	Enumerated *uint32
+}
+
+// EventChangeValue is the new-value choice carried by change-of-value events.
+type EventChangeValue struct {
+	Kind string
+	Bits []bool
+	Real *float32
 }
 
 type UnconfirmedEventNotificationHandler func(context.Context, EventNotificationIndication) error
@@ -533,12 +552,361 @@ func decodeEventNotificationPayload(payload []byte) (EventNotificationIndication
 			return EventNotificationIndication{}, fmt.Errorf("%w: event parameter choice mismatch", ErrDecodeFailure)
 		}
 		out.RawParameters = slices.Clone(payload[contentStart:contentEnd])
+		out.ParameterType, out.Parameters, decodeErr = decodeStandardEventParameters(out.EventType, out.RawParameters)
+		if decodeErr != nil {
+			return EventNotificationIndication{}, decodeErr
+		}
 		offset = next
 	}
 	if offset != len(payload) {
 		return EventNotificationIndication{}, fmt.Errorf("%w: trailing event notification bytes", ErrDecodeFailure)
 	}
 	return out, nil
+}
+
+type eventParameterDecoder struct {
+	payload []byte
+	offset  int
+	end     int
+}
+
+func newEventParameterDecoder(eventType uint32, raw []byte) (*eventParameterDecoder, error) {
+	start, end, next, err := decodeConstructedContent(raw, 0, bacencoding.AppTag(eventType))
+	if err != nil || next != len(raw) {
+		return nil, fmt.Errorf("%w: invalid event parameter envelope", ErrDecodeFailure)
+	}
+	return &eventParameterDecoder{payload: raw, offset: start, end: end}, nil
+}
+
+func (d *eventParameterDecoder) raw(tag bacencoding.AppTag) ([]byte, error) {
+	_, raw, next, err := bacencoding.DecodeExpectedContextPrimitive(d.payload[:d.end], d.offset, tag)
+	if err == nil {
+		d.offset = next
+	}
+	return raw, err
+}
+func (d *eventParameterDecoder) unsigned(tag bacencoding.AppTag) (uint32, error) {
+	raw, err := d.raw(tag)
+	if err != nil {
+		return 0, err
+	}
+	return bacencoding.DecodeUnsigned(raw)
+}
+func (d *eventParameterDecoder) signed(tag bacencoding.AppTag) (int32, error) {
+	raw, err := d.raw(tag)
+	if err != nil {
+		return 0, err
+	}
+	return bacencoding.DecodeSigned(raw)
+}
+func (d *eventParameterDecoder) real(tag bacencoding.AppTag) (float32, error) {
+	raw, err := d.raw(tag)
+	if err != nil {
+		return 0, err
+	}
+	return bacencoding.DecodeReal(raw)
+}
+func (d *eventParameterDecoder) double(tag bacencoding.AppTag) (float64, error) {
+	raw, err := d.raw(tag)
+	if err != nil {
+		return 0, err
+	}
+	return bacencoding.DecodeDouble(raw)
+}
+func (d *eventParameterDecoder) bits(tag bacencoding.AppTag, count int) ([]bool, error) {
+	raw, err := d.raw(tag)
+	if err != nil {
+		return nil, err
+	}
+	value, err := bacencoding.DecodeBitStringValue(raw)
+	if err != nil || count >= 0 && len(value.Bits) != count {
+		return nil, fmt.Errorf("%w: context %d bit count must be %d", ErrDecodeFailure, tag, count)
+	}
+	return value.Bits, nil
+}
+func (d *eventParameterDecoder) text(tag bacencoding.AppTag) (string, error) {
+	raw, err := d.raw(tag)
+	if err != nil {
+		return "", err
+	}
+	return bacencoding.DecodeCharacterStringValue(raw)
+}
+func (d *eventParameterDecoder) constructed(tag bacencoding.AppTag) ([]byte, error) {
+	start, end, next, err := decodeConstructedContent(d.payload[:d.end], d.offset, tag)
+	if err != nil {
+		return nil, err
+	}
+	d.offset = next
+	return d.payload[start:end], nil
+}
+func (d *eventParameterDecoder) application(tag bacencoding.AppTag) (bacencoding.ApplicationValue, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return nil, err
+	}
+	value, next, err := bacencoding.DecodeApplicationValue(body, 0)
+	if err != nil {
+		return nil, err
+	}
+	if next != len(body) {
+		return nil, fmt.Errorf("%w: trailing application value bytes in context %d", ErrDecodeFailure, tag)
+	}
+	return value, nil
+}
+func (d *eventParameterDecoder) propertyState(tag bacencoding.AppTag) (EventPropertyState, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return EventPropertyState{}, err
+	}
+	choice, _, _, err := bacencoding.ParseTag(body)
+	if err != nil || !choice.ContextSpecific || choice.Opening || choice.Closing {
+		return EventPropertyState{}, fmt.Errorf("%w: invalid property-state choice", ErrDecodeFailure)
+	}
+	parsed, raw, next, err := bacencoding.DecodeExpectedContextPrimitive(body, 0, choice.TagNumber)
+	if err != nil || next != len(body) {
+		return EventPropertyState{}, fmt.Errorf("%w: invalid property-state value", ErrDecodeFailure)
+	}
+	out := EventPropertyState{Choice: uint32(parsed.TagNumber)}
+	switch parsed.TagNumber {
+	case 0:
+		if len(raw) != 1 || raw[0] > 1 {
+			return EventPropertyState{}, fmt.Errorf("%w: invalid property-state boolean", ErrDecodeFailure)
+		}
+		value := raw[0] == 1
+		out.Boolean = &value
+	case 11:
+		value, decodeErr := bacencoding.DecodeUnsigned(raw)
+		if decodeErr != nil {
+			return EventPropertyState{}, decodeErr
+		}
+		out.Unsigned = &value
+	case 41:
+		value, decodeErr := bacencoding.DecodeSigned(raw)
+		if decodeErr != nil {
+			return EventPropertyState{}, decodeErr
+		}
+		out.Integer = &value
+	default:
+		value, decodeErr := bacencoding.DecodeEnumeratedValue(raw)
+		if decodeErr != nil {
+			return EventPropertyState{}, decodeErr
+		}
+		out.Enumerated = &value
+	}
+	return out, nil
+}
+func (d *eventParameterDecoder) changeValue(tag bacencoding.AppTag) (EventChangeValue, error) {
+	body, err := d.constructed(tag)
+	if err != nil {
+		return EventChangeValue{}, err
+	}
+	choice, _, _, err := bacencoding.ParseTag(body)
+	if err != nil || !choice.ContextSpecific || choice.Opening || choice.Closing {
+		return EventChangeValue{}, fmt.Errorf("%w: invalid change-value choice", ErrDecodeFailure)
+	}
+	_, raw, next, err := bacencoding.DecodeExpectedContextPrimitive(body, 0, choice.TagNumber)
+	if err != nil || next != len(body) {
+		return EventChangeValue{}, fmt.Errorf("%w: invalid change-value", ErrDecodeFailure)
+	}
+	switch choice.TagNumber {
+	case 0:
+		value, decodeErr := bacencoding.DecodeBitStringValue(raw)
+		if decodeErr != nil {
+			return EventChangeValue{}, decodeErr
+		}
+		return EventChangeValue{Kind: "bit-string", Bits: value.Bits}, nil
+	case 1:
+		value, decodeErr := bacencoding.DecodeReal(raw)
+		if decodeErr != nil {
+			return EventChangeValue{}, decodeErr
+		}
+		return EventChangeValue{Kind: "real", Real: &value}, nil
+	default:
+		return EventChangeValue{}, fmt.Errorf("%w: unknown change-value choice %d", ErrDecodeFailure, choice.TagNumber)
+	}
+}
+func (d *eventParameterDecoder) finish() error {
+	if d.offset != d.end {
+		return fmt.Errorf("%w: trailing standard event parameter bytes", ErrDecodeFailure)
+	}
+	return nil
+}
+
+func decodeStandardEventParameters(eventType uint32, raw []byte) (string, map[string]any, error) {
+	d, err := newEventParameterDecoder(eventType, raw)
+	if err != nil {
+		return "", nil, err
+	}
+	fields := map[string]any{}
+	status := func(tag bacencoding.AppTag) error {
+		value, decodeErr := d.bits(tag, 4)
+		fields["statusFlags"] = value
+		return decodeErr
+	}
+	switch eventType {
+	case 0:
+		fields["referencedBitString"], err = d.bits(0, -1)
+		if err == nil {
+			err = status(1)
+		}
+		return finishEventParameters(d, "change-of-bitstring", fields, err)
+	case 1:
+		fields["newState"], err = d.propertyState(0)
+		if err == nil {
+			err = status(1)
+		}
+		return finishEventParameters(d, "change-of-state", fields, err)
+	case 2:
+		fields["changedValue"], err = d.changeValue(0)
+		if err == nil {
+			err = status(1)
+		}
+		return finishEventParameters(d, "change-of-value", fields, err)
+	case 3:
+		fields["commandValue"], err = d.application(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["feedbackValue"], err = d.application(2)
+		}
+		if err == nil {
+			err = validateCommandFailureValues(fields["commandValue"], fields["feedbackValue"])
+		}
+		return finishEventParameters(d, "command-failure", fields, err)
+	case 4:
+		fields["referenceValue"], err = d.real(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["setpointValue"], err = d.real(2)
+		}
+		if err == nil {
+			fields["errorLimit"], err = d.real(3)
+		}
+		return finishEventParameters(d, "floating-limit", fields, err)
+	case 5:
+		fields["exceedingValue"], err = d.real(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["deadband"], err = d.real(2)
+		}
+		if err == nil {
+			fields["exceededLimit"], err = d.real(3)
+		}
+		return finishEventParameters(d, "out-of-range", fields, err)
+	case 8:
+		fields["newState"], err = d.unsigned(0)
+		if err == nil {
+			fields["newMode"], err = d.unsigned(1)
+		}
+		if err == nil {
+			err = status(2)
+		}
+		if err == nil {
+			fields["operationExpected"], err = d.unsigned(3)
+		}
+		return finishEventParameters(d, "change-of-life-safety", fields, err)
+	case 11:
+		fields["exceedingValue"], err = d.unsigned(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["exceededLimit"], err = d.unsigned(2)
+		}
+		return finishEventParameters(d, "unsigned-range", fields, err)
+	case 14:
+		fields["exceedingValue"], err = d.double(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["deadband"], err = d.double(2)
+		}
+		if err == nil {
+			fields["exceededLimit"], err = d.double(3)
+		}
+		return finishEventParameters(d, "double-out-of-range", fields, err)
+	case 15:
+		fields["exceedingValue"], err = d.signed(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["deadband"], err = d.unsigned(2)
+		}
+		if err == nil {
+			fields["exceededLimit"], err = d.signed(3)
+		}
+		return finishEventParameters(d, "signed-out-of-range", fields, err)
+	case 16:
+		fields["exceedingValue"], err = d.unsigned(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["deadband"], err = d.unsigned(2)
+		}
+		if err == nil {
+			fields["exceededLimit"], err = d.unsigned(3)
+		}
+		return finishEventParameters(d, "unsigned-out-of-range", fields, err)
+	case 17:
+		fields["changedValue"], err = d.text(0)
+		if err == nil {
+			err = status(1)
+		}
+		if err == nil {
+			fields["alarmValue"], err = d.text(2)
+		}
+		return finishEventParameters(d, "change-of-character-string", fields, err)
+	case 18:
+		if d.offset < d.end && isOpeningTagAt(d.payload, d.offset, 0) {
+			fields["presentValue"], err = d.application(0)
+		}
+		if err == nil {
+			fields["referencedFlags"], err = d.bits(1, 4)
+		}
+		return finishEventParameters(d, "change-of-status-flags", fields, err)
+	case 20:
+		return finishEventParameters(d, "none", fields, nil)
+	case 21:
+		fields["newValue"], err = d.application(0)
+		if err == nil {
+			err = status(1)
+		}
+		return finishEventParameters(d, "change-of-discrete-value", fields, err)
+	default:
+		return "raw", nil, nil
+	}
+}
+
+func validateCommandFailureValues(command, feedback any) error {
+	switch command.(type) {
+	case bacencoding.AppEnum:
+		if _, ok := feedback.(bacencoding.AppEnum); ok {
+			return nil
+		}
+	case bacencoding.AppUnsignedInteger:
+		if _, ok := feedback.(bacencoding.AppUnsignedInteger); ok {
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: command-failure values must be matching enumerated or unsigned values", ErrDecodeFailure)
+}
+
+func finishEventParameters(d *eventParameterDecoder, name string, fields map[string]any, err error) (string, map[string]any, error) {
+	if err == nil {
+		err = d.finish()
+	}
+	if err != nil {
+		return "", nil, err
+	}
+	return name, fields, nil
 }
 
 func hasContextPrimitive(payload []byte, offset int, expected bacencoding.AppTag) bool {
