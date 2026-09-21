@@ -6,6 +6,17 @@ import (
 	"github.com/worldiety/bacnet/apdu"
 )
 
+// HandleConfirmedEventNotification installs the shared confirmed event handler.
+// The APDU layer sends SimpleACK only after handler acceptance.
+func (c *Client) HandleConfirmedEventNotification(handler apdu.ConfirmedEventNotificationHandler) error {
+	return c.apduClient().HandleConfirmedEventNotification(handler)
+}
+
+// HandleUnconfirmedEventNotification installs the shared unconfirmed event handler.
+func (c *Client) HandleUnconfirmedEventNotification(handler apdu.UnconfirmedEventNotificationHandler) error {
+	return c.apduClient().HandleUnconfirmedEventNotification(handler)
+}
+
 // AcknowledgeAlarm sends one validated acknowledgement to a resolved target.
 func (c *Client) AcknowledgeAlarm(ctx context.Context, target Target, request apdu.AcknowledgeAlarmRequest) error {
 	dst, _, err := c.resolveTarget(ctx, target)

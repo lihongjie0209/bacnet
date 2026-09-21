@@ -19,6 +19,17 @@ type covAPDU struct {
 	unconfirmed      apdu.UnconfirmedCOVNotificationHandler
 	acknowledgements []apdu.AcknowledgeAlarmRequest
 	eventRequests    []apdu.GetEventInformationRequest
+	confirmedEvent   apdu.ConfirmedEventNotificationHandler
+	unconfirmedEvent apdu.UnconfirmedEventNotificationHandler
+}
+
+func (f *covAPDU) HandleConfirmedEventNotification(handler apdu.ConfirmedEventNotificationHandler) error {
+	f.confirmedEvent = handler
+	return nil
+}
+func (f *covAPDU) HandleUnconfirmedEventNotification(handler apdu.UnconfirmedEventNotificationHandler) error {
+	f.unconfirmedEvent = handler
+	return nil
 }
 
 func (f *covAPDU) SubscribeCOV(_ context.Context, _ netprim.Address, req apdu.SubscribeCOVRequest) error {
@@ -44,6 +55,22 @@ func (f *covAPDU) AcknowledgeAlarm(_ context.Context, _ netprim.Address, req apd
 func (f *covAPDU) GetEventInformation(_ context.Context, _ netprim.Address, req apdu.GetEventInformationRequest) (apdu.GetEventInformationACK, error) {
 	f.eventRequests = append(f.eventRequests, req)
 	return apdu.GetEventInformationACK{MoreEvents: true}, nil
+}
+
+func TestHandleEventNotificationsDelegatesToAPDU(t *testing.T) {
+	fake := &covAPDU{}
+	client := fakeClient(fake)
+	confirmed := func(context.Context, apdu.EventNotificationIndication) error { return nil }
+	unconfirmed := func(context.Context, apdu.EventNotificationIndication) error { return nil }
+	if err := client.HandleConfirmedEventNotification(confirmed); err != nil {
+		t.Fatal(err)
+	}
+	if err := client.HandleUnconfirmedEventNotification(unconfirmed); err != nil {
+		t.Fatal(err)
+	}
+	if fake.confirmedEvent == nil || fake.unconfirmedEvent == nil {
+		t.Fatal("event handlers were not delegated")
+	}
 }
 
 func TestSubscribeCOVObjectPropertyAndCancel(t *testing.T) {
