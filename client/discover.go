@@ -328,6 +328,13 @@ func withGlobalBroadcast(targets []broadcastTarget, enabled bool) []broadcastTar
 // (restricted to the configured Interface if set). If nothing can be detected
 // it falls back to the limited broadcast 255.255.255.255.
 func (c *Client) broadcastTargets() ([]broadcastTarget, error) {
+	if len(c.cfg.TransportBroadcasts) > 0 {
+		targets := make([]broadcastTarget, len(c.cfg.TransportBroadcasts))
+		for i, address := range cloneBACnetAddresses(c.cfg.TransportBroadcasts) {
+			targets[i] = broadcastTarget{label: "transport", address: address}
+		}
+		return targets, nil
+	}
 	if c.cfg.Broadcast.IsValid() {
 		if !c.cfg.Broadcast.Is4() {
 			return nil, fmt.Errorf("broadcast %s must be an IPv4 address", c.cfg.Broadcast)

@@ -10,9 +10,12 @@ import (
 	"github.com/worldiety/bacnet/npdu"
 )
 
-type externalTestTransport struct{}
+type externalTestTransport struct{ destinations chan netprim.Address }
 
-func (externalTestTransport) SendNPDU(context.Context, netprim.Address, npdu.NetworkLayerProtocolDataUnit) error {
+func (t externalTestTransport) SendNPDU(_ context.Context, destination netprim.Address, _ npdu.NetworkLayerProtocolDataUnit) error {
+	if t.destinations != nil {
+		t.destinations <- destination
+	}
 	return nil
 }
 
@@ -47,5 +50,21 @@ func TestNewWithTransportAndTargetAddress(t *testing.T) {
 func TestNewWithTransportRejectsNilTransport(t *testing.T) {
 	if _, _, err := NewWithTransport(Config{}, nil, apdu.MaxApduLengthAccepted(480)); err == nil {
 		t.Fatal("expected nil transport error")
+	}
+}
+
+func TestExternalTransportDiscoveryUsesConfiguredBroadcast(t *testing.T) {
+	broadcast := netprim.Address{Network: netprim.LocalNetwork, MAC: []byte{255}}
+	transport := externalTestTransport{destinations: make(chan netprim.Address, 1)}
+	client, _, err := NewWithTransport(Config{TransportBroadcasts: []netprim.Address{broadcast}}, transport, apdu.MaxApduLengthAccepted(480))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = client.Close() }()
+	if _, err = client.Discover(t.Context(), WithWindow(time.Millisecond), WithLocalOnly()); err != nil {
+		t.Fatal(err)
+	}
+	if destination := <-transport.destinations; !destination.Equal(broadcast) {
+		t.Fatalf("destination = %#v", destination)
 	}
 }

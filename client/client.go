@@ -37,6 +37,7 @@ import (
 	"github.com/worldiety/bacnet/apdu"
 	"github.com/worldiety/bacnet/bip"
 	baclog "github.com/worldiety/bacnet/common/log"
+	"github.com/worldiety/bacnet/common/netprim"
 )
 
 // Default timing values used when a Config field is left zero.
@@ -58,6 +59,10 @@ type Config struct {
 	// Broadcast overrides the Who-Is broadcast address. The zero value
 	// auto-detects the directed broadcast of every broadcast-capable interface.
 	Broadcast netip.Addr
+
+	// TransportBroadcasts overrides discovery destinations for caller-owned
+	// non-BACnet/IP transports. Each address is copied by constructors.
+	TransportBroadcasts []netprim.Address
 
 	// Timeout is the per-request invoke timeout. Zero uses 10s.
 	Timeout time.Duration
@@ -141,6 +146,10 @@ func NewWithTransport(cfg Config, transport apdu.NPDUTransport, maxAPDU apdu.Max
 	if cfg.ForeignDevice != nil {
 		return nil, nil, errors.New("foreign-device registration requires BACnet/IP")
 	}
+	if len(cfg.TransportBroadcasts) > 64 {
+		return nil, nil, errors.New("transport broadcasts must contain at most 64 addresses")
+	}
+	cfg.TransportBroadcasts = cloneBACnetAddresses(cfg.TransportBroadcasts)
 	if cfg.Logger != nil {
 		baclog.Logger = cfg.Logger
 	} else {
@@ -167,6 +176,15 @@ func NewWithTransport(cfg Config, transport apdu.NPDUTransport, maxAPDU apdu.Max
 	}
 	client := &Client{cfg: cfg, externalASE: ase, apduClientOverride: typed}
 	return client, ase, nil
+}
+
+func cloneBACnetAddresses(addresses []netprim.Address) []netprim.Address {
+	cloned := make([]netprim.Address, len(addresses))
+	for i, address := range addresses {
+		address.MAC = append([]byte(nil), address.MAC...)
+		cloned[i] = address
+	}
+	return cloned
 }
 
 // New creates and starts a BACnet client runtime from cfg. The caller must call
