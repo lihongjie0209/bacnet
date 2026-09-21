@@ -2,6 +2,7 @@ package encoding
 
 import (
 	"fmt"
+	"slices"
 
 	"github.com/worldiety/bacnet/common/types"
 )
@@ -38,6 +39,19 @@ const (
 type ApplicationValue interface {
 	applicationValue()
 }
+
+// MaxAppRawLength bounds a pre-encoded complex property value. BACnet APDUs
+// impose tighter negotiated limits; this guard prevents accidental unbounded
+// allocations before those transport limits are applied.
+const MaxAppRawLength = 65535
+
+// AppRaw is a complete, pre-encoded BACnet property value. It is intended for
+// constructed and sequence-valued properties that cannot be represented by a
+// single application primitive. Callers must validate the property's exact
+// ASN.1 shape before constructing AppRaw.
+type AppRaw []byte
+
+func (AppRaw) applicationValue() {}
 
 // AppNull represents a BACnet Null value (application tag 0).
 type AppNull struct{}
@@ -251,6 +265,12 @@ func DecodeApplicationValue(raw []byte, offset int) (ApplicationValue, int, erro
 // (tag byte(s) + value bytes). The returned slice is newly allocated and caller-owned.
 func EncodeApplicationValue(v ApplicationValue) ([]byte, error) {
 	switch val := v.(type) {
+	case AppRaw:
+		if len(val) == 0 || len(val) > MaxAppRawLength {
+			return nil, fmt.Errorf("%w: raw property value length %d must be between 1 and %d", ErrEncodeFailure, len(val), MaxAppRawLength)
+		}
+		return slices.Clone(val), nil
+
 	case AppNull:
 		return EncodeNull(), nil
 

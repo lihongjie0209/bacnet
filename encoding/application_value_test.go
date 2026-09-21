@@ -244,6 +244,30 @@ func TestEncodeApplicationValueError(t *testing.T) {
 	}
 }
 
+func TestEncodeApplicationValueRaw(t *testing.T) {
+	raw := AppRaw{0x0E, 0xB4, 0x08, 0x1E, 0x00, 0x00, 0x21, 0x01, 0x0F}
+	encoded, err := EncodeApplicationValue(raw)
+	if err != nil {
+		t.Fatalf("EncodeApplicationValue(AppRaw): %v", err)
+	}
+	if !reflect.DeepEqual(encoded, []byte(raw)) {
+		t.Fatalf("encoded = %x, want %x", encoded, raw)
+	}
+
+	encoded[0] = 0xFF
+	if raw[0] != 0x0E {
+		t.Fatal("encoded AppRaw aliases caller storage")
+	}
+}
+
+func TestEncodeApplicationValueRawRejectsInvalidSize(t *testing.T) {
+	for _, raw := range []AppRaw{nil, {}, make(AppRaw, MaxAppRawLength+1)} {
+		if _, err := EncodeApplicationValue(raw); err == nil || !errors.Is(err, ErrEncodeFailure) {
+			t.Fatalf("EncodeApplicationValue(AppRaw length %d) error = %v, want ErrEncodeFailure", len(raw), err)
+		}
+	}
+}
+
 // TestCharacterStringUTF8RoundTrip verifies that non-ASCII UTF-8 character
 // strings (character set 0), such as accented characters commonly emitted by
 // field devices, encode and decode losslessly.
