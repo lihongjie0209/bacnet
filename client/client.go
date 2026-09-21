@@ -115,19 +115,58 @@ func (c Config) resolveWindow() time.Duration {
 // goroutine at a time for a given request; discovery operations may run
 // concurrently. Create one with New and release it with Close.
 type Client struct {
-	cfg        Config
-	rt         *bacnet.ClientRuntime
-	cancel     context.CancelFunc
-	wg         sync.WaitGroup
-	mu         sync.RWMutex
-	renewalErr error
-	closeOnce  sync.Once
-	closeErr   error
+	cfg         Config
+	rt          *bacnet.ClientRuntime
+	externalASE apdu.ASE
+	cancel      context.CancelFunc
+	wg          sync.WaitGroup
+	mu          sync.RWMutex
+	renewalErr  error
+	closeOnce   sync.Once
+	closeErr    error
 
 	// apduClientOverride, when non-nil, supplies the APDU client instead of the
 	// runtime's. It exists so tests can inject a fake transport without a live
 	// socket; production code leaves it nil.
 	apduClientOverride apdu.Client
+}
+
+// NewWithTransport creates a high-level BACnet client over a caller-owned NPDU
+// transport. The returned ASE receives inbound NPDUs through OnInboundNPDU.
+// Closing the client closes the ASE but does not close the caller's transport.
+func NewWithTransport(cfg Config, transport apdu.NPDUTransport, maxAPDU apdu.MaxApduLengthAccepted) (*Client, apdu.ASE, error) {
+	if transport == nil {
+		return nil, nil, errors.New("NPDU transport is required")
+	}
+	if cfg.ForeignDevice != nil {
+		return nil, nil, errors.New("foreign-device registration requires BACnet/IP")
+	}
+	if cfg.Logger != nil {
+		baclog.Logger = cfg.Logger
+	} else {
+		baclog.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+	}
+	aseConfig := apdu.DefaultASEConfig()
+	aseConfig.InvokeTimeout = cfg.timeout()
+	aseConfig.APDURetries = uint8(cfg.retries())
+	if maxAPDU != 0 {
+		aseConfig.MaxAPDUSizeAccepted = maxAPDU
+	}
+	ase, err := apdu.NewASE(aseConfig, transport)
+	if err != nil {
+		return nil, nil, fmt.Errorf("create ASE: %w", err)
+	}
+	clientConfig := apdu.DefaultClientConfig()
+	if maxAPDU != 0 {
+		clientConfig.MaxAPDULengthAccepted = maxAPDU
+	}
+	typed, err := apdu.NewClient(ase, clientConfig)
+	if err != nil {
+		_ = ase.Close()
+		return nil, nil, fmt.Errorf("create APDU client: %w", err)
+	}
+	client := &Client{cfg: cfg, externalASE: ase, apduClientOverride: typed}
+	return client, ase, nil
 }
 
 // New creates and starts a BACnet client runtime from cfg. The caller must call
@@ -259,6 +298,9 @@ func (c *Client) Close() error {
 		}
 		if c.rt != nil {
 			c.closeErr = c.rt.Close()
+		}
+		if c.externalASE != nil {
+			c.closeErr = errors.Join(c.closeErr, c.externalASE.Close())
 		}
 		c.wg.Wait()
 	})

@@ -35,6 +35,12 @@ func TargetAddr(ap netip.AddrPort) Target {
 	return Target{addr: netprim.NewAddressFromAddrPort(ap)}
 }
 
+// TargetAddress returns a target for an already constructed BACnet address.
+// It supports native transports as well as routed BACnet/IP addresses.
+func TargetAddress(address netprim.Address) Target {
+	return targetForAddress(address)
+}
+
 // targetForAddress returns a Target that addresses a device by an already
 // resolved transport address, preserving any routing (remote network + MAC).
 func targetForAddress(addr netprim.Address) Target {
