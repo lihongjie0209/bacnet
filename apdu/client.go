@@ -87,6 +87,10 @@ type Client interface {
 	// SubscribeCOVProperty sends a confirmed SubscribeCOVProperty request and expects SimpleACK.
 	SubscribeCOVProperty(ctx context.Context, dst netprim.Address, req SubscribeCOVPropertyRequest) error
 
+	// HandleConfirmedCOVNotification registers a typed handler and sends a
+	// SimpleACK only after the handler accepts the decoded notification.
+	HandleConfirmedCOVNotification(handler ConfirmedCOVNotificationHandler) error
+
 	// RegisterIAmHandler registers a typed handler for incoming unconfirmed I-Am indications.
 	RegisterIAmHandler(handler IAmHandler) error
 

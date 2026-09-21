@@ -167,6 +167,7 @@ func TestServiceChoiceString(t *testing.T) {
 
 func TestServiceChoiceClassifiers(t *testing.T) {
 	confirmed := []ServiceChoice{
+		ServiceChoiceConfirmedCOVNotification,
 		ServiceChoiceSubscribeCOV,
 		ServiceChoiceReadProperty,
 		ServiceChoiceReadPropertyConditional,
@@ -193,7 +194,7 @@ func TestServiceChoiceClassifiers(t *testing.T) {
 			if !IsConfirmedServiceChoice(choice) {
 				t.Fatalf("IsConfirmedServiceChoice(%v) = false, want true", choice)
 			}
-			if choice != ServiceChoiceSubscribeCOV && IsUnconfirmedServiceChoice(choice) {
+			if choice != ServiceChoiceSubscribeCOV && choice != ServiceChoiceConfirmedCOVNotification && IsUnconfirmedServiceChoice(choice) {
 				t.Fatalf("IsUnconfirmedServiceChoice(%v) = true, want false", choice)
 			}
 		})
@@ -218,7 +219,7 @@ func TestServiceChoiceClassifiers(t *testing.T) {
 			if !IsUnconfirmedServiceChoice(choice) {
 				t.Fatalf("IsUnconfirmedServiceChoice(%v) = false, want true", choice)
 			}
-			if choice != ServiceChoiceUnconfirmedTextMessage && IsConfirmedServiceChoice(choice) {
+			if choice != ServiceChoiceUnconfirmedTextMessage && choice != ServiceChoiceIHave && IsConfirmedServiceChoice(choice) {
 				t.Fatalf("IsConfirmedServiceChoice(%v) = true, want false", choice)
 			}
 		})

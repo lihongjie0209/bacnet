@@ -229,6 +229,38 @@ type UnconfirmedCOVNotificationIndication struct {
 // UnconfirmedCOVNotificationHandler processes typed unconfirmed COV notifications.
 type UnconfirmedCOVNotificationHandler func(ctx context.Context, indication UnconfirmedCOVNotificationIndication) error
 
+// ConfirmedCOVNotificationIndication is the typed payload of an inbound
+// confirmed COV notification. Its fields are identical to the unconfirmed
+// form; the APDU transaction metadata remains owned by the application layer.
+type ConfirmedCOVNotificationIndication = UnconfirmedCOVNotificationIndication
+
+// ConfirmedCOVNotificationHandler processes a typed confirmed notification.
+// Returning nil causes a SimpleACK; returning an error lets the ASE encode the
+// protocol error selected by its confirmed-service state machine.
+type ConfirmedCOVNotificationHandler func(ctx context.Context, indication ConfirmedCOVNotificationIndication) error
+
+func (c *clientImpl) HandleConfirmedCOVNotification(handler ConfirmedCOVNotificationHandler) error {
+	if handler == nil {
+		return errors.NewValidationError("handler", nil, ErrHandlerNotFound)
+	}
+
+	return c.ue.HandleConfirmed(ServiceChoiceConfirmedCOVNotification, func(ctx context.Context, indication ConfirmedIndicationICI) (ConfirmedResponseICI, error) {
+		payload, err := decodeUnconfirmedCOVNotificationPayload(indication.ServiceRequest.Payload)
+		if err != nil {
+			return ConfirmedResponseICI{}, err
+		}
+		payload.Source = indication.Source
+		if err := handler(ctx, payload); err != nil {
+			return ConfirmedResponseICI{}, err
+		}
+		return ConfirmedResponseICI{
+			Destination:     indication.Source,
+			InvokeID:        indication.InvokeID,
+			ServiceResponse: ServiceResult{},
+		}, nil
+	})
+}
+
 func (c *clientImpl) HandleUnconfirmedCOVNotification(handler UnconfirmedCOVNotificationHandler) error {
 	if handler == nil {
 		return errors.NewValidationError("handler", nil, ErrHandlerNotFound)

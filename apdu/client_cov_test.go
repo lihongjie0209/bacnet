@@ -209,6 +209,57 @@ func TestHandleUnconfirmedCOVNotification(t *testing.T) {
 	}
 }
 
+func TestHandleConfirmedCOVNotificationAcknowledgesAfterHandler(t *testing.T) {
+	transport := newTestNPDUTransport()
+	ase, _ := NewASE(ASEConfig{InvokeTimeout: time.Second, MaxConcurrentInvokes: 4}, transport)
+	clientRaw, err := NewClient(ase, ClientConfig{})
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	client := clientRaw.(*clientImpl)
+
+	handled := make(chan ConfirmedCOVNotificationIndication, 1)
+	if err = client.HandleConfirmedCOVNotification(func(_ context.Context, indication ConfirmedCOVNotificationIndication) error {
+		handled <- indication
+		return nil
+	}); err != nil {
+		t.Fatalf("HandleConfirmedCOVNotification: %v", err)
+	}
+
+	src, _ := netprim.NewAddress(netprim.LocalNetwork, []byte{0x02})
+	devID, _ := types.NewObjectIdentifier(types.ObjectTypeDevice, 1234)
+	objID, _ := types.NewObjectIdentifier(types.ObjectTypeAnalogInput, 7)
+	payload := encodeUnconfirmedCOVNotificationPayloadForTest(3, devID, objID, 60, []COVPropertyValue{{
+		PropertyIdentifier: types.PropertyIdentifierPresentValue,
+		Value:              []byte{0x44, 0x41, 0x20, 0x00, 0x00},
+	}})
+	apduBytes, err := encodeAPDU(outboundAPDU{Type: PDUTypeConfirmedRequest, InvokeID: 19, ServiceChoice: ServiceChoiceConfirmedCOVNotification, Payload: payload})
+	if err != nil {
+		t.Fatalf("encodeAPDU: %v", err)
+	}
+	npkt, _ := npdu.NewLocalAPDU(netprim.NetworkPriorityNormal, true, apduBytes)
+	if err = ase.OnInboundNPDU(context.Background(), src, *npkt); err != nil {
+		t.Fatalf("OnInboundNPDU: %v", err)
+	}
+
+	select {
+	case got := <-handled:
+		if got.SubscriberProcessIdentifier != 3 || !got.Source.Equal(src) {
+			t.Fatalf("indication = %#v", got)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("timeout waiting for confirmed COV handler")
+	}
+	sent := <-transport.ch
+	ack, err := decodeAPDU(sent.packet.APDUBytes())
+	if err != nil {
+		t.Fatalf("decode ack: %v", err)
+	}
+	if ack.Type != PDUTypeSimpleACK || ack.InvokeID != 19 || ack.ServiceChoice != ServiceChoiceConfirmedCOVNotification {
+		t.Fatalf("ack = %#v", ack)
+	}
+}
+
 func TestHandleUnconfirmedCOVNotificationMultiple(t *testing.T) {
 	transport := newTestNPDUTransport()
 	ase, _ := NewASE(ASEConfig{InvokeTimeout: time.Second, MaxConcurrentInvokes: 4}, transport)
@@ -284,6 +335,9 @@ func TestHandleUnconfirmedCOVNilHandlersAndMalformedPayloads(t *testing.T) {
 
 	if err := client.HandleUnconfirmedCOVNotification(nil); !errors.Is(err, ErrHandlerNotFound) {
 		t.Fatalf("HandleUnconfirmedCOVNotification nil err = %v, want %v", err, ErrHandlerNotFound)
+	}
+	if err := client.HandleConfirmedCOVNotification(nil); !errors.Is(err, ErrHandlerNotFound) {
+		t.Fatalf("HandleConfirmedCOVNotification nil err = %v, want %v", err, ErrHandlerNotFound)
 	}
 	if err := client.HandleUnconfirmedCOVNotificationMultiple(nil); !errors.Is(err, ErrHandlerNotFound) {
 		t.Fatalf("HandleUnconfirmedCOVNotificationMultiple nil err = %v, want %v", err, ErrHandlerNotFound)

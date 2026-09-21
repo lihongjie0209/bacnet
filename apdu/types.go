@@ -68,6 +68,10 @@ const (
 	// value collides with ServiceChoiceUnconfirmedTextMessage.
 
 	ServiceChoiceSubscribeCOV ServiceChoice = 5
+	// ServiceChoiceConfirmedCOVNotification is the confirmed notification
+	// service choice. Confirmed and unconfirmed choices occupy distinct wire
+	// namespaces, so its numeric value may overlap an unconfirmed choice.
+	ServiceChoiceConfirmedCOVNotification ServiceChoice = 1
 
 	// Confirmed object-access service choices.
 	// ISO 135-2024, application-layer service-choice groups.
@@ -194,7 +198,8 @@ func IsUnconfirmedServiceChoice(choice ServiceChoice) bool {
 // IsConfirmedServiceChoice reports whether choice is currently supported for confirmed requests.
 func IsConfirmedServiceChoice(choice ServiceChoice) bool {
 	switch choice {
-	case ServiceChoiceSubscribeCOV,
+	case ServiceChoiceConfirmedCOVNotification,
+		ServiceChoiceSubscribeCOV,
 		ServiceChoiceReadProperty,
 		ServiceChoiceReadPropertyConditional,
 		ServiceChoiceReadPropertyMultiple,
