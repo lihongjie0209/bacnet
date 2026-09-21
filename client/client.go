@@ -151,9 +151,9 @@ func NewWithTransport(cfg Config, transport apdu.NPDUTransport, maxAPDU apdu.Max
 	}
 	cfg.TransportBroadcasts = cloneBACnetAddresses(cfg.TransportBroadcasts)
 	if cfg.Logger != nil {
-		baclog.Logger = cfg.Logger
+		baclog.SetLogger(cfg.Logger)
 	} else {
-		baclog.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		baclog.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}
 	aseConfig := apdu.DefaultASEConfig()
 	aseConfig.InvokeTimeout = cfg.timeout()
@@ -191,11 +191,11 @@ func cloneBACnetAddresses(addresses []netprim.Address) []netprim.Address {
 // Close when finished.
 func New(cfg Config) (*Client, error) {
 	if cfg.Logger != nil {
-		baclog.Logger = cfg.Logger
+		baclog.SetLogger(cfg.Logger)
 	} else {
 		// Quiet by default: the library uses a single global logger, and a
 		// downstream consumer should not get unsolicited output.
-		baclog.Logger = slog.New(slog.NewTextHandler(io.Discard, nil))
+		baclog.SetLogger(slog.New(slog.NewTextHandler(io.Discard, nil)))
 	}
 
 	bindAddr := netip.AddrFrom4([4]byte{0, 0, 0, 0})
