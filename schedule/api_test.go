@@ -29,6 +29,40 @@ func TestPublicCalendarCodecRoundTrip(t *testing.T) {
 	}
 }
 
+func TestPublicEffectivePeriodAndValueCodecsRoundTrip(t *testing.T) {
+	year := uint16(2026)
+	month := uint8(9)
+	day := uint8(24)
+	period := schedule.BACnetEffectivePeriod{
+		Start: schedule.BACnetCalendarDate{Year: &year, Month: &month, Day: &day},
+		End:   schedule.BACnetCalendarDate{},
+	}
+	raw, err := schedule.EncodeEffectivePeriod(period)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotPeriod, err := schedule.DecodeEffectivePeriod(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotPeriod, period) {
+		t.Fatalf("decoded period = %#v, want %#v", gotPeriod, period)
+	}
+
+	wantValue := schedule.BACnetScheduleValue{Type: "characterString", Value: "occupied"}
+	raw, err = schedule.EncodeValue(wantValue)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotValue, err := schedule.DecodeValue(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(gotValue, wantValue) {
+		t.Fatalf("decoded value = %#v, want %#v", gotValue, wantValue)
+	}
+}
+
 func TestPublicWeeklyAndSpecialEventCodecsRoundTrip(t *testing.T) {
 	days := make([][]schedule.BACnetTimeValue, 7)
 	for i := range days {

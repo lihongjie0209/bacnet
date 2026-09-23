@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	bacclient "github.com/worldiety/bacnet/client"
+	"github.com/worldiety/bacnet/common/types"
 	bacencoding "github.com/worldiety/bacnet/encoding"
 )
 
@@ -324,6 +325,23 @@ func scheduleJSONValue(v bacencoding.ApplicationValue) (string, any) {
 		return "double", float64(x)
 	case bacencoding.AppEnum:
 		return "enumerated", float64(x)
+	case bacencoding.AppCharacterString:
+		return "characterString", string(x)
+	case bacencoding.AppOctetString:
+		return "octetString", base64.StdEncoding.EncodeToString(x)
+	case bacencoding.AppBitString:
+		bits := make([]any, len(x.Bits))
+		for i, bit := range x.Bits {
+			bits[i] = bit
+		}
+		return "bitString", bits
+	case bacencoding.AppObjectIdentifier:
+		oid := types.ObjectIdentifier(x)
+		return "objectIdentifier", fmt.Sprintf("%s:%d", bacclient.ObjectTypeName(oid.ObjectType()), oid.Instance())
+	case bacencoding.AppDate:
+		return "date", fmt.Sprintf("%04d-%02d-%02d", x.Year, x.Month, x.Day)
+	case bacencoding.AppTime:
+		return "time", fmt.Sprintf("%02d:%02d:%02d.%02d", x.Hour, x.Minute, x.Second, x.Hundredths)
 	default:
 		return "unsupported", bacnetApplicationJSON(v)
 	}
@@ -523,4 +541,45 @@ func decodeBACnetSpecialEvents(raw []byte, max int) ([]BACnetSpecialEvent, error
 		out = append(out, e)
 	}
 	return out, nil
+}
+
+func encodeBACnetEffectivePeriod(period BACnetEffectivePeriod) ([]byte, error) {
+	start, err := encodeBACnetDate(period.Start)
+	if err != nil {
+		return nil, err
+	}
+	end, err := encodeBACnetDate(period.End)
+	if err != nil {
+		return nil, err
+	}
+	out := bacencoding.EncodeApplicationPrimitive(uint8(bacencoding.AppTagDate), start)
+	return append(out, bacencoding.EncodeApplicationPrimitive(uint8(bacencoding.AppTagDate), end)...), nil
+}
+
+func decodeBACnetEffectivePeriod(raw []byte) (BACnetEffectivePeriod, error) {
+	startValue, next, err := bacencoding.DecodeApplicationValue(raw, 0)
+	if err != nil {
+		return BACnetEffectivePeriod{}, err
+	}
+	endValue, end, err := bacencoding.DecodeApplicationValue(raw, next)
+	if err != nil {
+		return BACnetEffectivePeriod{}, err
+	}
+	if end != len(raw) {
+		return BACnetEffectivePeriod{}, errors.New("effective period has trailing data")
+	}
+	startDate, ok := startValue.(bacencoding.AppDate)
+	if !ok {
+		return BACnetEffectivePeriod{}, errors.New("effective period start is not a date")
+	}
+	endDate, ok := endValue.(bacencoding.AppDate)
+	if !ok {
+		return BACnetEffectivePeriod{}, errors.New("effective period end is not a date")
+	}
+	start, err := decodeBACnetDate([]byte{dateYearByte(startDate.Year), startDate.Month, startDate.Day, startDate.Weekday})
+	if err != nil {
+		return BACnetEffectivePeriod{}, err
+	}
+	finish, err := decodeBACnetDate([]byte{dateYearByte(endDate.Year), endDate.Month, endDate.Day, endDate.Weekday})
+	return BACnetEffectivePeriod{Start: start, End: finish}, err
 }

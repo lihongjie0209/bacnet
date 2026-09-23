@@ -3,6 +3,8 @@
 // application-tag identity.
 package schedule
 
+import "errors"
+
 // EncodeCalendarEntries encodes a BACnet Calendar property's ordered entries.
 func EncodeCalendarEntries(entries []BACnetCalendarEntry) ([]byte, error) {
 	return encodeBACnetCalendarEntries(entries)
@@ -35,4 +37,32 @@ func EncodeSpecialEvents(events []BACnetSpecialEvent) ([]byte, error) {
 // caller-owned event bound.
 func DecodeSpecialEvents(raw []byte, maxEvents int) ([]BACnetSpecialEvent, error) {
 	return decodeBACnetSpecialEvents(raw, maxEvents)
+}
+
+// EncodeEffectivePeriod encodes the two BACnet Date values of a Schedule
+// object's Effective_Period property.
+func EncodeEffectivePeriod(period BACnetEffectivePeriod) ([]byte, error) {
+	return encodeBACnetEffectivePeriod(period)
+}
+
+// DecodeEffectivePeriod decodes a complete Schedule Effective_Period value.
+func DecodeEffectivePeriod(raw []byte) (BACnetEffectivePeriod, error) {
+	return decodeBACnetEffectivePeriod(raw)
+}
+
+// EncodeValue encodes one application-tagged Schedule value.
+func EncodeValue(value BACnetScheduleValue) ([]byte, error) {
+	return encodeBACnetScheduleValue(value)
+}
+
+// DecodeValue decodes one complete application-tagged Schedule value.
+func DecodeValue(raw []byte) (BACnetScheduleValue, error) {
+	value, end, err := decodeBACnetScheduleValue(raw, 0)
+	if err != nil {
+		return BACnetScheduleValue{}, err
+	}
+	if end != len(raw) {
+		return BACnetScheduleValue{}, errors.New("BACnet schedule value has trailing data")
+	}
+	return value, nil
 }

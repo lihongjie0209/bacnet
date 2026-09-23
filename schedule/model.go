@@ -28,6 +28,11 @@ type BACnetCalendarEntry struct {
 	WeekNDay *BACnetWeekNDay
 }
 
+type BACnetEffectivePeriod struct {
+	Start BACnetCalendarDate
+	End   BACnetCalendarDate
+}
+
 type BACnetScheduleValue struct {
 	Type      string
 	Value     any
